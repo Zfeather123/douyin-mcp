@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -43,6 +44,9 @@ class ConfigTests(unittest.TestCase):
         settings = Settings(mcp_transport="http")
         with self.assertRaises(AppError):
             validate_for_http(settings)
+
+    def test_shanghai_timezone_is_available(self):
+        self.assertEqual(ZoneInfo("Asia/Shanghai").key, "Asia/Shanghai")
 
 
 if __name__ == "__main__":
