@@ -334,7 +334,6 @@ src/douyin_creator_mcp/
 └── tools/
     └── browser_tools.py      # 13 个 MCP 工具契约
 
-tests/                        # 自动化测试
 easy-install.ps1              # Windows 一键安装
 ```
 
@@ -349,15 +348,11 @@ easy-install.ps1              # Windows 一键安装
 5. 新字段必须定义缺失语义、数据来源、解析版本和测试样例。
 6. 不读取或返回浏览器认证材料，不接入未公开私有接口。
 
-### 自动化验证
+### 基础验证
 
 ```powershell
-python -m compileall -q src tests
-python -m pytest -q
-python -m unittest discover -s tests
+python -m compileall -q src
 ```
-
-当前基线：**80 passed，另有 6 个参数化子测试通过**。
 
 ### 真实浏览器验收
 
