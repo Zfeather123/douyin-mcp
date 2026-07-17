@@ -1,62 +1,50 @@
-# douyin-mcp
+<div align="center">
+  <h1>douyin-mcp</h1>
+  <p><strong>让 AI 读懂你的抖音创作数据</strong></p>
+  <p>本地运行 · 数据可追溯 · 面向个人创作者的 MCP Server</p>
 
-让 AI Agent 读取、理解并分析你在抖音创作者中心真实可见的数据。
+  <p>
+    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&amp;logoColor=white" alt="Python 3.11+"></a>
+    <img src="https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
+    <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-Compatible-22C55E" alt="MCP Compatible"></a>
+    <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/FastMCP-Powered-FF6B35" alt="FastMCP Powered"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-8B5CF6" alt="AGPL-3.0"></a>
+    <a href="https://github.com/Kuhakucai/douyin-mcp/stargazers"><img src="https://img.shields.io/github/stars/Kuhakucai/douyin-mcp?style=flat&amp;logo=github&amp;label=Stars" alt="GitHub Stars"></a>
+  </p>
+
+  <p>
+    <a href="#快速开始">快速开始</a> ·
+    <a href="#核心能力">核心能力</a> ·
+    <a href="#推荐用法">推荐用法</a> ·
+    <a href="#mcp-工具">MCP 工具</a> ·
+    <a href="#工作原理">工作原理</a> ·
+    <a href="#安全合规与许可">安全合规</a>
+  </p>
+</div>
+
+![douyin-mcp：从创作者数据到 AI 分析](assets/douyin-mcp-hero.svg)
 
 > [!IMPORTANT]
-> **平台条款风险：** 本项目是非官方社区工具，未获抖音或其关联公司授权、认可或背书。抖音用户服务协议第 2.4、5.1、5.3 和 7.1 条涉及非商业许可、自动化访问、平台外处理或展示信息、向第三方提供信息以及账号处置风险。本项目使用 Playwright 驱动浏览器；即使只读取本人账号中可见的数据，也仍可能违反平台条款或触发账号风控。使用前必须阅读 [平台合规与非官方声明](PLATFORM_COMPLIANCE.md)，并自行确认已取得必要书面授权。AGPL 允许商业使用本项目代码，但不授予访问抖音、商业使用平台或数据、向第三方提供平台信息或使用抖音商标的权利。
+> **这是非官方社区工具。** 本项目未获抖音或其关联公司授权、认可或背书。项目使用 Playwright 操作浏览器；即使只读取本人账号中真实可见的数据，也可能违反平台条款或触发账号风控。使用前请阅读[平台合规与非官方声明](PLATFORM_COMPLIANCE.md)，确认已取得所需授权，并先执行风险确认。AGPL 只许可项目代码，不授予任何平台访问权、数据权或商标权。
 
-## 这是什么？
+## 一分钟了解
 
-`douyin-mcp` 是一个面向个人创作者的本地 MCP Server。
+`douyin-mcp` 在你的电脑上复用专用 Chrome 登录状态，将抖音创作者中心页面中真实可见的作品和经营指标保存到本地 SQLite，再通过 MCP 提供给支持 MCP 的 AI Agent。
 
-它在你的电脑上运行，复用专用 Chrome 的抖音登录状态，把创作者中心页面中的作品和经营指标保存到本地 SQLite，再通过 MCP 协议提供给支持 MCP 的 Agent。
+| | |
+|---|---|
+| 📊 **读取真实可见数据**<br>增量同步作品列表、播放、点赞、评论、分享、收藏、完播率和涨粉等页面可见指标。 | 🧠 **让 Agent 查询和分析**<br>查询作品、对比表现、计算互动指标、生成复盘上下文，并导出 JSON 或 CSV。 |
+| 🧾 **结论附带证据**<br>返回采集时间、缓存新鲜度、字段覆盖率、缺失原因和质量警告，不用猜测值填空。 | 🔒 **登录凭证留在本地**<br>Cookie 与浏览器状态保存在专用 profile 中，MCP 不向 Agent 返回认证材料。 |
 
-可以把它理解为一座桥：
+它解决的是一个具体问题：
 
 ```text
 抖音创作者中心  →  本地结构化数据  →  MCP  →  AI Agent
 ```
 
-它解决的是“Agent 看不到我的创作者数据”这个具体问题。当前范围是 **Windows、本机运行、单用户、单抖音账号**；不提供多账号托管、云端采集或未公开接口抓取。
+当前范围为 **Windows、本机运行、单用户、单抖音账号**。本项目不提供多账号托管、云端采集、数据转售、未公开接口抓取，或绕过登录、安全验证、权限及风控的能力。
 
-## 它能做什么？
-
-### 获取你真实可见的数据
-
-- 首次使用或登录失效时打开可见 Chrome，让你扫码或完成安全验证。
-- 后续复用专用浏览器 profile，通常不需要重复登录。
-- 增量读取虚拟滚动作品列表，保存播放、点赞、评论、分享和收藏等页面可见指标。
-- 按需分批读取作品详情，采集完播率、5 秒完播率、平均观看时长、曝光和涨粉等可见指标。
-
-### 让 Agent 查询和分析
-
-- 查询作品列表、单条作品表现和历史快照。
-- 对比 2～20 条作品的关键指标。
-- 计算点赞率、收藏率、评论率、分享率、播放率和互动率。
-- 使用透明、带版本的规则进行轻量潜力排序。
-- 生成带数据时间、覆盖率、缺失项和证据引用的复盘上下文。
-- 导出 JSON 或 CSV，便于进一步分析或备份。
-
-### 帮你判断结论是否可信
-
-- 返回缓存新鲜度、字段覆盖率、缺失原因和质量警告。
-- 页面未显示的值保存为 `null`，不会用 0 或猜测值填充。
-- 列表与详情分别保存为快照，不会混写来源。
-- 首次成功同步后绑定当前账号，误切账号时拒绝写入。
-
-## 工作方式与边界
-
-这套方案在技术上只使用当前用户的登录状态和页面可见内容，并把浏览器操作、数据结构化和 Agent 推理分成了清晰的三层：
-
-1. **浏览器层**：Playwright 操作项目专用 Chrome，读取你在抖音创作者中心页面上真实可见的内容。它不能绕过登录、权限或平台验证。
-2. **数据层**：本地服务将页面内容规范化为作品、指标快照、同步任务和质量状态，保存在本机 SQLite。
-3. **MCP 层**：FastMCP 把同步、查询、对比和复盘能力暴露为标准工具，Agent 不需要直接操作 Cookie 或理解页面 DOM。
-
-这也是它能兼顾安全和可审计性的原因：登录凭证留在专用浏览器 profile 中，MCP 只返回业务数据和质量信息；每个分析结果都可以追溯到采集时间、数据来源和快照。
-
-这些技术边界不代表抖音已经允许自动化访问。平台条款、专项规则和实际授权始终优先于项目功能说明；本项目不支持绕过登录、安全验证、权限、风控或技术保护，也不支持多账号托管、云端代采和数据转售。
-
-## 5 分钟快速开始
+## 快速开始
 
 ### 环境要求
 
@@ -65,7 +53,7 @@
 - Google Chrome
 - 一个支持 MCP 和终端操作的 Agent
 
-### 一句话安装
+### 方式一：让 Agent 安装
 
 直接告诉 Agent：
 
@@ -73,25 +61,48 @@
 帮我克隆并安装 https://github.com/Kuhakucai/douyin-mcp 项目
 ```
 
-Agent 应完成克隆并运行 `easy-install.ps1`。脚本会创建项目专用 `.venv`、安装依赖、创建默认 `.env`、初始化数据库并执行环境诊断。
+Agent 应克隆项目并运行 `easy-install.ps1`。脚本会创建项目专用 `.venv`、安装依赖、生成默认 `.env`、初始化数据库并执行环境诊断。
 
-首次扫码、修改 MCP 客户端配置和同步真实数据前，Agent 应先向你展示平台风险并征得确认。阅读 `PLATFORM_COMPLIANCE.md` 后，由你明确授权 Agent 运行：
+> [!NOTE]
+> 首次扫码登录、修改 MCP 客户端配置或同步真实数据前，Agent 应先展示平台风险并征得你的明确确认。
+
+### 方式二：手动安装
+
+<details>
+<summary><strong>展开查看 PowerShell 安装命令</strong></summary>
 
 ```powershell
-douyin-mcp acknowledge-platform-risk --yes
+git clone https://github.com/Kuhakucai/douyin-mcp.git
+cd douyin-mcp
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+Copy-Item .env.example .env
+douyin-mcp init
+douyin-mcp doctor
 ```
 
-如果已经克隆项目，可直接运行：
+也可以在已克隆的项目中运行一键脚本：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\easy-install.ps1
 ```
 
+</details>
+
+### 确认平台风险
+
+阅读 [PLATFORM_COMPLIANCE.md](PLATFORM_COMPLIANCE.md) 后，由你明确授权 Agent 执行：
+
+```powershell
+douyin-mcp acknowledge-platform-risk --yes
+```
+
 ### 接入 MCP 客户端
 
-安装结束时，`douyin-mcp init` 会输出包含本机绝对路径的 `mcp_config`。把它加入你的 MCP 客户端，然后重启客户端或新建会话。
+安装结束后，`douyin-mcp init` 会输出包含本地绝对路径的 `mcp_config`。将它加入 MCP 客户端，然后重启客户端或新建会话。
 
-通用配置结构如下；实际使用时请以 `init` 输出为准：
+通用配置结构如下，实际使用时请以 `init` 输出为准：
 
 ```json
 {
@@ -111,7 +122,7 @@ powershell -ExecutionPolicy Bypass -File .\easy-install.ps1
 
 ### 完成首次同步
 
-确认平台风险并连接成功后，可以直接对 Agent 说：
+连接成功并完成风险确认后，可以直接对 Agent 说：
 
 ```text
 检查我的抖音数据状态。如果还没有登录，打开浏览器让我扫码；
@@ -119,11 +130,37 @@ powershell -ExecutionPolicy Bypass -File .\easy-install.ps1
 完成后告诉我数据时间、字段覆盖率、缺失项和质量警告。
 ```
 
-登录窗口不需要一直置顶。同步时可以切换到其他软件，但不要关闭专用 Chrome、切换账号或手动跳转页面。
+首次需要登录时会打开可见 Chrome。完成扫码或安全验证后，请保持项目专用 Chrome 打开；可以切换到其他软件，但不要切换账号、手动跳转页面或关闭窗口。
 
-## 推荐的 Agent 用法
+## 核心能力
 
-日常使用时，优先检查缓存新鲜度，再决定是否打开浏览器同步：
+### 获取真实可见的数据
+
+- 首次使用或登录失效时打开可见 Chrome，由用户扫码或完成安全验证。
+- 后续复用项目专用浏览器 profile，通常不需要重复登录。
+- 增量读取虚拟滚动作品列表，保存播放、点赞、评论、分享和收藏等页面可见指标。
+- 按需分批读取作品详情，采集完播率、5 秒完播率、平均观看时长、曝光和涨粉等页面可见指标。
+
+### 查询、对比与复盘
+
+- 查询作品列表、单条作品表现和历史快照。
+- 对比 2～20 条作品的关键指标。
+- 计算点赞率、收藏率、评论率、分享率、播放率和互动率。
+- 使用透明、带版本的规则进行轻量潜力排序。
+- 生成带数据时间、覆盖率、缺失项和证据引用的复盘上下文。
+- 导出 JSON 或 CSV，便于进一步分析或备份。
+
+### 判断结论是否可信
+
+- 返回缓存新鲜度、字段覆盖率、缺失原因和质量警告。
+- 页面未显示的值保存为 `null`，不会用 0 或猜测值填充。
+- 列表与详情分别保存为快照，不会混写数据来源。
+- 派生比率只使用同一原始快照中的分子和分母，并记录公式版本。
+- 首次成功同步后绑定当前账号，检测到误切账号时拒绝写入。
+
+## 推荐用法
+
+日常使用时，建议先检查缓存新鲜度，再决定是否打开浏览器同步：
 
 ```text
 检查我的抖音数据状态。只在缓存过期时更新作品列表和最近 20 条详情；
@@ -138,26 +175,12 @@ powershell -ExecutionPolicy Bypass -File .\easy-install.ps1
 - “哪些作品值得做续集？说明排序依据和数据局限。”
 - “导出全部历史快照为 JSON。”
 
-## 手动安装与 CLI
-
-不使用 Agent 时，可以手动安装：
-
-```powershell
-git clone https://github.com/Kuhakucai/douyin-mcp.git
-cd douyin-mcp
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-Copy-Item .env.example .env
-douyin-mcp init
-douyin-mcp doctor
-douyin-mcp acknowledge-platform-risk --yes
-```
+## CLI
 
 常用命令：
 
 ```powershell
-# 首次登录或登录失效时使用
+# 首次登录或登录失效
 douyin-mcp login --timeout 180
 
 # 同步作品列表
@@ -177,7 +200,8 @@ douyin-mcp performance <video_id> --period 30d
 douyin-mcp status
 ```
 
-完整 CLI：
+<details>
+<summary><strong>查看完整 CLI 命令表</strong></summary>
 
 | 命令 | 用途 |
 |---|---|
@@ -193,9 +217,14 @@ douyin-mcp status
 | `export` | 导出 JSON 或 CSV |
 | `purge` | 清除本地数据和专用浏览器 profile |
 
+</details>
+
 ## MCP 工具
 
-默认入口提供 13 个浏览器数据工具：
+默认入口提供 13 个浏览器数据工具。
+
+<details open>
+<summary><strong>查看 MCP 工具列表</strong></summary>
 
 | 工具 | 用途 |
 |---|---|
@@ -213,9 +242,17 @@ douyin-mcp status
 | `douyin_browser_generate_review` | 生成带证据和警告的复盘上下文 |
 | `douyin_browser_export_data` | 导出 JSON 或 CSV |
 
-所有工具使用内部账号键 `browser-default`，无需 Agent 传递账号 ID。常见业务状态包括 `completed`、`partial`、`cache_hit` 和 `user_action_required`。
+</details>
+
+所有工具使用内部账号键 `browser-default`，Agent 无需传递账号 ID。常见业务状态包括 `completed`、`partial`、`cache_hit` 和 `user_action_required`。
 
 ## 工作原理
+
+浏览器操作、数据结构化和 Agent 推理被分成三个清晰层次：
+
+1. **浏览器层**：Playwright 操作项目专用 Chrome，读取用户在创作者中心页面中真实可见的内容，不能绕过登录、权限或平台验证。
+2. **数据层**：本地服务将页面内容规范化为作品、指标快照、同步任务和质量状态，并保存到本机 SQLite。
+3. **MCP 层**：FastMCP 暴露同步、查询、对比和复盘工具，Agent 不需要直接操作 Cookie 或理解页面 DOM。
 
 ```text
 MCP Client / Agent
@@ -225,14 +262,14 @@ douyin_creator_mcp.server
         │
         ├── BrowserService ── Playwright ── 专用 Chrome profile
         │
-        └── Database ── data/douyin.sqlite
+        └── Database ──────── data/douyin.sqlite
 ```
 
-列表同步负责发现作品和采集列表页指标；详情同步按批次访问作品详情页。两种来源分别保存为快照，不会互相覆盖。派生比率只使用同一个原始快照的分子和分母，并记录公式版本。
+列表同步负责发现作品和采集列表页指标，详情同步按批次访问作品详情页。两种来源分别保存为快照，不会互相覆盖。
 
-## 数据可靠性与平台边界
+### 数据可靠性
 
-- 页面显示什么就保存什么；未显示的值是 `null`，不会用 0 或推测值填充。
+- 页面显示什么就保存什么；未显示的值为 `null`，不会用 0 或推测值填充。
 - 写入详情前校验作品身份；无法确认时拒绝写入。
 - 同一批次、同一作品、同一来源只写一个快照；失败同步不会覆盖历史可信快照。
 - `period=30d` 等周期按快照采集时间筛选，`all` 表示全部本地历史。
@@ -240,15 +277,15 @@ douyin_creator_mcp.server
 - 潜力排序在样本少于 10 条时仅供参考，不代表平台官方评分。
 - 页面 DOM、字段可见性和风控策略可能变化，使用时应关注覆盖率和质量警告。
 
-## 登录态、账号与并发
+### 登录态、账号与并发
 
-- 登录状态保存在 `data/browser-profile/`，所以再次启动通常不需要扫码。
-- 首次成功列表同步会用作品标题和发布时间摘要建立不可逆账号指纹，不保存昵称、原始标题或作品 ID 作为身份信息。
+- 登录状态保存在 `data/browser-profile/`，再次启动通常不需要重新扫码。
+- 首次成功列表同步会基于作品标题和发布时间摘要建立不可逆账号指纹，不保存昵称、原始标题或作品 ID 作为身份信息。
 - 检测到账号变化时返回 `account_mismatch` 并拒绝写入。
 - 同一 profile 同时只允许一个同步进程；死亡进程留下的锁会在安全确认后自动恢复。
 - 确认要更换账号时，运行 `douyin-mcp purge --yes`，然后重新登录和同步。
 
-## 本地数据与隐私
+### 本地数据与隐私
 
 ```text
 data/
@@ -259,9 +296,9 @@ data/
 └── logs/
 ```
 
-这些目录、数据库、备份和浏览器诊断产物均被 `.gitignore` 排除。不要使用 `git add -f` 提交它们。
+以上目录、数据库、备份和浏览器诊断产物均被 `.gitignore` 排除，请勿使用 `git add -f` 提交。
 
-MCP 不会把 Cookie、localStorage、sessionStorage、验证码或账号密码返回给 Agent。但作品标题以及你主动查询的创作数据会进入 Agent 上下文；如果 Agent 使用云端模型，应同时遵守对应模型服务的数据政策。
+MCP 不会把 Cookie、`localStorage`、`sessionStorage`、验证码或账号密码返回给 Agent。但作品信息以及你主动查询的创作数据会进入 Agent 上下文；如果 Agent 使用云端模型，还应遵守对应模型服务的数据政策。
 
 导出与清除：
 
@@ -274,11 +311,13 @@ douyin-mcp purge
 douyin-mcp purge --yes
 ```
 
-`purge --yes` 会删除数据库、数据库备份、导出、报告和专用浏览器 profile，此操作不可恢复。
+> [!CAUTION]
+> `purge --yes` 会删除数据库、数据库备份、导出、报告和专用浏览器 profile，此操作不可恢复。
 
 ## 常见问题
 
-### PowerShell 找不到 `douyin-mcp`
+<details>
+<summary><strong>PowerShell 找不到 <code>douyin-mcp</code></strong></summary>
 
 激活虚拟环境：
 
@@ -286,13 +325,16 @@ douyin-mcp purge --yes
 .\.venv\Scripts\Activate.ps1
 ```
 
-或者直接使用：
+或者直接运行：
 
 ```powershell
 .\.venv\Scripts\douyin-mcp.exe doctor
 ```
 
-### PowerShell 阻止安装脚本
+</details>
+
+<details>
+<summary><strong>PowerShell 阻止安装脚本</strong></summary>
 
 下面的执行策略只作用于本次命令：
 
@@ -300,19 +342,33 @@ douyin-mcp purge --yes
 powershell -ExecutionPolicy Bypass -File .\easy-install.ps1
 ```
 
-### 登录后仍提示需要操作
+</details>
 
-保持专用 Chrome 打开，完成扫码、验证码或安全验证，再重试同步。不要使用日常 Chrome profile 替换项目的专用 profile。
+<details>
+<summary><strong>登录后仍提示需要操作</strong></summary>
 
-### 返回 `profile_in_use`
+保持项目专用 Chrome 打开，完成扫码、验证码或安全验证，再重试同步。不要使用日常 Chrome profile 替换项目专用 profile。
+
+</details>
+
+<details>
+<summary><strong>返回 <code>profile_in_use</code></strong></summary>
 
 另一个同步进程仍在使用专用浏览器。等待它结束后重试；如果原进程已经退出，锁会在安全确认后自动恢复。
 
-### 详情同步返回 `partial`
+</details>
 
-查看 `failures`、`coverage` 和 `next_cursor`。常见原因是作品状态暂不支持查看详情、页面未展示某项指标，或当前批次仍需继续。
+<details>
+<summary><strong>详情同步返回 <code>partial</code></strong></summary>
+
+查看 `failures`、`coverage` 和 `next_cursor`。常见原因包括作品暂不支持详情、页面未展示某项指标，或当前批次仍需继续。
+
+</details>
 
 ## 开发者指南
+
+<details>
+<summary><strong>展开开发环境、项目结构和验收说明</strong></summary>
 
 ### 开发环境
 
@@ -321,7 +377,8 @@ git clone https://github.com/Kuhakucai/douyin-mcp.git
 cd douyin-mcp
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python -m pip install -e .
+python -m pip install pytest
 Copy-Item .env.example .env
 ```
 
@@ -350,8 +407,6 @@ easy-install.ps1              # Windows 一键安装
 
 ### 扩展原则
 
-新增能力时建议保持以下边界：
-
 1. 页面读取和 DOM 处理放在 `browser/`。
 2. 可测试的业务逻辑放在 `services/`。
 3. MCP 工具只做参数声明、服务调用和统一错误响应。
@@ -379,20 +434,29 @@ douyin-mcp status
 
 验收时应核对登录态复用、页面声明数量、加载数量、解析数量、重复同步幂等性、详情身份校验、覆盖率和失败原因。真实账号数据和验收产物不得提交到仓库。
 
-## 免责声明
+</details>
 
-`douyin-mcp` 是独立维护的第三方开源项目，不是抖音、字节跳动或其关联公司的官方、授权、认证或合作产品。用户必须自行确认拥有合法账号、数据访问权以及自动化访问、平台外处理或展示、向 Agent 或模型服务提供数据所需的全部书面授权。
+## 安全、合规与许可
 
-本项目不会通过 MCP 返回 Cookie、localStorage、sessionStorage、验证码或账号密码，但作品信息和经营数据会进入 MCP 客户端及 Agent 上下文；使用云端模型时，相关服务可能接收、记录或处理这些数据。“本机运行”不表示业务数据一定不会离开本机。
+`douyin-mcp` 是独立维护的第三方开源项目，不是抖音、字节跳动或其关联公司的官方、授权、认证或合作产品。
 
-在适用法律允许的最大范围内，本项目按“原样”提供，不保证平台持续可访问、账号不受限制、数据完整准确或页面解析持续有效。使用者应自行评估账号限制或封禁、内容或数据删除、权益无法访问、业务中断、隐私泄露及错误分析等风险。完整边界见 [平台合规与非官方声明](PLATFORM_COMPLIANCE.md)。
+抖音用户服务协议第 2.4、5.1、5.3 和 7.1 条涉及非商业许可、自动化访问、平台外处理或展示信息、向第三方提供信息以及账号处置风险。用户必须自行确认拥有合法账号、数据访问权，以及自动化访问、平台外处理或展示、向 Agent 或模型服务提供数据所需的全部书面授权。完整说明见[平台合规与非官方声明](PLATFORM_COMPLIANCE.md)。
 
-## 开源协议
+本项目不会通过 MCP 返回 Cookie、`localStorage`、`sessionStorage`、验证码或账号密码，但作品信息和经营数据可能进入 MCP 客户端及 Agent 上下文。“本机运行”不代表业务数据一定不会离开本机。
+
+项目基于 [GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）开源。AGPL 允许商业使用代码，但修改版分发及网络交互场景需要按许可证提供对应源代码。许可证不授予抖音平台访问权、数据权、商业使用平台或数据的权利，也不授予商标权。
 
 Copyright (C) 2026 Kuhakucai。`Kuhakucai` 与 `Puppetsho` 是同一作者使用的 Git 提交身份，详见 [AUTHORS.md](AUTHORS.md)。
 
-本项目基于 [GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）开源。分发本项目或修改版时必须继续使用兼容的 AGPL 许可并提供对应源码；修改版通过网络与用户交互时，还必须按 AGPL 第 13 条向这些用户提供对应源码。AGPL 允许商业使用，但不允许闭源分发修改版，也不允许在不向网络用户提供对应源码的情况下把修改版作为网络服务运行。
+## 参与贡献
 
-AGPL 要求按其条款向接收者或符合条件的网络用户提供对应源码，不等于所有私人修改都必须发布到公共 GitHub 仓库，也不禁止收费或商业使用代码。
+欢迎提交 Issue 和 Pull Request。开始前请阅读：
 
-许可证只覆盖本项目代码和随附文档，不授予任何抖音平台访问权、数据权、商业使用权或商标权。抖音平台条款与代码许可证是两个独立层次；即使代码使用符合 AGPL，平台访问和数据处理仍可能需要抖音的事先书面授权。使用与贡献前请阅读 [平台合规声明](PLATFORM_COMPLIANCE.md) 和 [贡献指南](CONTRIBUTING.md)。
+- [贡献指南](CONTRIBUTING.md)
+- [平台合规声明](PLATFORM_COMPLIANCE.md)
+- [开源许可证](LICENSE)
+
+<div align="center">
+  <p><strong>如果这个项目对你有帮助，欢迎点一个 Star。</strong></p>
+  <p>Built for local, evidence-backed creator analytics.</p>
+</div>
