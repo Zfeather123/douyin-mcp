@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+include PLATFORM_COMPLIANCE.md
+include CONTRIBUTING.md
+include AUTHORS.md
+include easy-install.ps1
+include .env.example

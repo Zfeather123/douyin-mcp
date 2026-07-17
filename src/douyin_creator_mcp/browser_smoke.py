@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from .browser.extractors import LOGGED_IN
+from .compliance import PLATFORM_COMPLIANCE_NOTICE
 from .config import ensure_runtime_dirs, load_settings
 from .responses import response_from_exception, sanitize_payload
 from .services.browser_service import BROWSER_DEFAULT_ACCOUNT_ID, BrowserService
@@ -179,6 +180,8 @@ def build_service() -> BrowserService:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in {"login", "status", "sync", "details"}:
+        print(f"Platform compliance notice: {PLATFORM_COMPLIANCE_NOTICE}", file=sys.stderr)
     try:
         payload = run_command(args, build_service())
     except Exception as exc:

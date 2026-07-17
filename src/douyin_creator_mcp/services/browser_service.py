@@ -29,6 +29,10 @@ from ..browser.extractors import (
 )
 from ..browser.profile_lock import ProfileLock
 from ..browser.session import BrowserSession
+from ..compliance import (
+    platform_compliance_status,
+    require_platform_risk_acknowledgement,
+)
 from ..config import Settings
 from ..errors import (
     ACCOUNT_IDENTITY_UNRESOLVED,
@@ -67,6 +71,7 @@ class BrowserService:
     # Login and status -------------------------------------------------
 
     def login_start(self) -> dict[str, Any]:
+        require_platform_risk_acknowledgement(self.settings.data_dir)
         try:
             with self._browser_access():
                 session = self._get_session(headless=False)
@@ -129,6 +134,9 @@ class BrowserService:
         )
         return {
             "status": "completed",
+            "platform_compliance": platform_compliance_status(
+                self.settings.data_dir
+            ),
             "login_status": browser_snapshot["status"] if browser_snapshot else "unknown",
             "last_login_check_at": browser_snapshot["created_at"] if browser_snapshot else None,
             "list_freshness": self._freshness(
@@ -228,6 +236,7 @@ class BrowserService:
         mode: str = "visible",
         force: bool = False,
     ) -> dict[str, Any]:
+        require_platform_risk_acknowledgement(self.settings.data_dir)
         self._validate_mode(mode)
         del force  # A full list sync is already idempotent at the video identity layer.
         job_id = self._start_job(
@@ -347,6 +356,7 @@ class BrowserService:
         mode: str = "visible",
         account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
     ) -> dict[str, Any]:
+        require_platform_risk_acknowledgement(self.settings.data_dir)
         self._validate_mode(mode)
         if video_ids is not None and not 1 <= len(video_ids) <= 50:
             raise AppError(VALIDATION_ERROR, "video_ids must contain between 1 and 50 ids.")

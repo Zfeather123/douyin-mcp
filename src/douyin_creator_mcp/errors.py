@@ -23,6 +23,9 @@ PARSER_DEGRADED = "parser_degraded"
 VIDEO_IDENTITY_UNRESOLVED = "video_identity_unresolved"
 ACCOUNT_MISMATCH = "account_mismatch"
 ACCOUNT_IDENTITY_UNRESOLVED = "account_identity_unresolved"
+PLATFORM_TERMS_ACKNOWLEDGEMENT_REQUIRED = (
+    "platform_terms_acknowledgement_required"
+)
 
 
 @dataclass(slots=True)

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,9 @@ name = "douyin-creator-mcp"
 version = "0.1.0"
 description = "Local Douyin creator MCP server using a persistent browser login session."
 readme = "README.md"
+authors = [{ name = "Kuhakucai" }]
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp>=2.0",
@@ -24,3 +27,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 douyin_creator_mcp = ["storage/*.sql"]
+
+[tool.setuptools.data-files]
+"share/doc/douyin-creator-mcp" = ["PLATFORM_COMPLIANCE.md", "AUTHORS.md"]

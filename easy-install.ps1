@@ -96,6 +96,9 @@ Invoke-CheckedNative -FilePath $VenvPython -Arguments @('-m', 'douyin_creator_mc
 
 Write-Host ''
 Write-Host 'Installation complete. Next steps:'
-Write-Host '1. Add the mcp_config from the init output to your MCP client configuration.'
-Write-Host '2. For first login run: .\.venv\Scripts\douyin-mcp.exe login --timeout 180'
-Write-Host '3. Read README.md for installation and MCP configuration guidance.'
+Write-Host '1. Read PLATFORM_COMPLIANCE.md and the current Douyin platform terms.'
+Write-Host '2. If you understand the risk and have the necessary authorization, run:'
+Write-Host '   .\.venv\Scripts\douyin-mcp.exe acknowledge-platform-risk --yes'
+Write-Host '3. Add the mcp_config from the init output to your MCP client configuration.'
+Write-Host '4. For first login run: .\.venv\Scripts\douyin-mcp.exe login --timeout 180'
+Write-Host '5. Read README.md for installation and MCP configuration guidance.'

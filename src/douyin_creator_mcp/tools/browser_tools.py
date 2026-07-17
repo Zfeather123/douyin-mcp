@@ -18,7 +18,7 @@ def register_browser_tools(mcp: Any, services: Any) -> None:
 
     @mcp.tool()
     def douyin_browser_login_start() -> dict[str, Any]:
-        """打开可见浏览器；仅在首次登录或登录过期时需要扫码。"""
+        """确认平台风险后打开可见浏览器；首次登录或登录过期时需要扫码。"""
         return call("login_start")
 
     @mcp.tool()
@@ -38,7 +38,7 @@ def register_browser_tools(mcp: Any, services: Any) -> None:
         mode: str = "background_first",
         recent_limit: int = 20,
     ) -> dict[str, Any]:
-        """仅在缓存过期时同步列表、详情或全部数据。"""
+        """确认平台风险后，仅在缓存过期时同步列表、详情或全部数据。"""
         return call(
             "sync_if_needed",
             scope=scope,
@@ -52,7 +52,7 @@ def register_browser_tools(mcp: Any, services: Any) -> None:
         mode: str = "visible",
         force: bool = False,
     ) -> dict[str, Any]:
-        """同步作品列表及页面可见的播放、点赞、评论和分享数据。"""
+        """确认平台风险后同步作品列表及页面可见指标。"""
         return call("sync_creator_data", mode=mode, force=force)
 
     @mcp.tool()
@@ -64,7 +64,7 @@ def register_browser_tools(mcp: Any, services: Any) -> None:
         cursor: int = 0,
         mode: str = "visible",
     ) -> dict[str, Any]:
-        """分批采集作品详情页的完播率、播放量、互动率等指标。"""
+        """确认平台风险后分批采集作品详情页指标。"""
         return call(
             "sync_video_details",
             video_ids=video_ids,

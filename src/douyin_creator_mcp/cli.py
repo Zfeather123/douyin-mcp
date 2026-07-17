@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from .browser.extractors import LOGGED_IN
+from .compliance import (
+    PLATFORM_COMPLIANCE_NOTICE,
+    platform_compliance_status,
+    record_platform_risk_acknowledgement,
+)
 from .config import ensure_runtime_dirs, load_settings
 from .responses import error_response, response_from_exception, sanitize_payload, success_response
 from .services.browser_service import BrowserService
@@ -28,6 +33,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="初始化目录和数据库，并输出 MCP 配置示例。")
     commands.add_parser("doctor", help="检查本地运行环境，不打开浏览器。")
+
+    acknowledge = commands.add_parser(
+        "acknowledge-platform-risk",
+        help="确认已阅读平台自动化访问风险说明。",
+    )
+    acknowledge.add_argument(
+        "--yes",
+        action="store_true",
+        help="明确确认已阅读并理解平台条款风险。",
+    )
 
     login = commands.add_parser("login", help="打开浏览器并等待扫码登录。")
     login.add_argument("--timeout", type=float, default=180.0)
@@ -144,6 +159,24 @@ def run_command(
             profile_dir=str(service.settings.douyin_browser_profile_dir.resolve()),
             backup_path=str(service.db.last_backup_path) if service.db.last_backup_path else None,
             mcp_config=_mcp_config(service),
+            platform_compliance=platform_compliance_status(
+                service.settings.data_dir
+            ),
+        )
+    if args.command == "acknowledge-platform-risk":
+        if not args.yes:
+            return error_response(
+                "confirmation_required",
+                "请先阅读 PLATFORM_COMPLIANCE.md；确认理解风险后加 --yes。",
+                retryable=True,
+                platform_compliance=platform_compliance_status(
+                    service.settings.data_dir
+                ),
+            )
+        return success_response(
+            platform_compliance=record_platform_risk_acknowledgement(
+                service.settings.data_dir
+            )
         )
     if args.command == "doctor":
         checks = {
@@ -204,6 +237,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     _configure_utf8_console()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in {
+        "init",
+        "acknowledge-platform-risk",
+        "login",
+        "sync",
+        "details",
+    }:
+        print(f"平台合规提示：{PLATFORM_COMPLIANCE_NOTICE}", file=sys.stderr)
     try:
         payload = run_command(args, build_service())
     except Exception as exc:
