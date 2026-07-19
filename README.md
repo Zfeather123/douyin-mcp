@@ -58,7 +58,7 @@
 直接告诉 Agent：
 
 ```text
-帮我克隆并安装 https://github.com/Kuhakucai/douyin-mcp 项目
+帮我克隆并安装 https://github.com/Kuhakucai/douyin-mcp.git 项目
 ```
 
 Agent 应克隆项目并运行 `easy-install.ps1`。脚本会创建项目专用 `.venv`、安装依赖、生成默认 `.env`、初始化数据库并执行环境诊断。
