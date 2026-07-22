@@ -211,6 +211,22 @@ _OPEN_TRAFFIC_TAB_SCRIPT = r"""
 }
 """
 
+_EXTRACT_TEXT_METRICS_SCRIPT = r"""
+() => {
+  const lines = (document.body.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const isLabel = s => /^[一-龥A-Za-z0-9]{2,14}(率|量|数|占比)$/.test(s);
+  const isNum = s => /^-?[\d,]+(\.\d+)?$/.test(s);
+  const out = {};
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (!isLabel(lines[i]) || !isNum(lines[i + 1])) continue;
+    let value = lines[i + 1];
+    if (lines[i + 2] === '%') value += '%';
+    if (!(lines[i] in out)) out[lines[i]] = value;
+  }
+  return out;
+}
+"""
+
 DETAIL_METRIC_FIELDS = (
     "exposure_count",
     "play_count",
@@ -588,9 +604,13 @@ def extract_detail_metrics(
 
     metrics: dict[str, Any] = {field: None for field in DETAIL_METRIC_FIELDS}
     raw_by_field: dict[str, str] = {}
+    # 别名表外的标签(如图文帖的 划走率/平均浏览图片数/文案完读率)按原始标签名
+    # 保留进 raw_metrics 一并入库,而不是静默丢弃;不影响 schema 与 quality 口径
+    extra_raw: dict[str, str] = {}
     for label, raw_value in raw.items():
         field = _DETAIL_ALIASES.get(str(label).strip())
         if not field:
+            extra_raw[str(label).strip()] = str(raw_value).strip()
             continue
         raw_by_field[field] = str(raw_value).strip()
         if field in {"five_second_completion_rate", "completion_rate"}:
@@ -634,7 +654,7 @@ def extract_detail_metrics(
         "source_url": url,
         "login_status": login_status,
         "identity_confirmed": identity_confirmed,
-        "raw_metrics": raw_by_field,
+        "raw_metrics": {**extra_raw, **raw_by_field},
         "metrics": metrics,
         "missing_reasons": missing,
         "quality": quality,
@@ -650,6 +670,20 @@ def _collect_detail_sections(
 ) -> tuple[dict[str, Any], list[str]]:
     raw: dict[str, Any] = {}
     collected_sections: list[str] = []
+
+    def _merge_text_pass(section: str) -> None:
+        # 新版数据块(划走率/平均浏览图片数/文案完读率/评论进入率等)不再使用
+        # metric-label-* class,改用 innerText「标签行+数值行(+%行)」配对兜底采集;
+        # class 采集结果优先(setdefault 不覆盖已有标签)
+        try:
+            text_metrics = page.evaluate(_EXTRACT_TEXT_METRICS_SCRIPT)
+        except Exception:
+            return
+        if isinstance(text_metrics, dict) and text_metrics:
+            for label, value in text_metrics.items():
+                raw.setdefault(str(label).strip(), value)
+            collected_sections.append(section)
+
     try:
         overview = page.evaluate(_EXTRACT_DETAIL_METRICS_SCRIPT)
     except Exception:
@@ -657,6 +691,7 @@ def _collect_detail_sections(
     if isinstance(overview, dict):
         raw.update(overview)
         collected_sections.append("overview")
+    _merge_text_pass("overview_text")
 
     if login_status != LOGGED_IN:
         return raw, collected_sections
@@ -668,7 +703,7 @@ def _collect_detail_sections(
         return raw, collected_sections
     wait_for_timeout = getattr(page, "wait_for_timeout", None)
     if callable(wait_for_timeout):
-        wait_for_timeout(800)
+        wait_for_timeout(1500)
     try:
         traffic = page.evaluate(_EXTRACT_DETAIL_METRICS_SCRIPT)
     except Exception:
@@ -676,6 +711,7 @@ def _collect_detail_sections(
     if isinstance(traffic, dict):
         raw.update(traffic)
         collected_sections.append("traffic")
+    _merge_text_pass("traffic_text")
     return raw, collected_sections
 
 
