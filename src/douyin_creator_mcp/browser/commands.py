@@ -24,23 +24,27 @@ class BrowserCommand:
 
 @dataclass(frozen=True, slots=True)
 class LoginStart(BrowserCommand):
+    account_id: str = "browser-default"
     headless: bool = False
     priority: int = PRIORITY_USER
 
 
 @dataclass(frozen=True, slots=True)
 class LoginStatus(BrowserCommand):
+    account_id: str = "browser-default"
     priority: int = PRIORITY_USER
 
 
 @dataclass(frozen=True, slots=True)
 class SyncCreatorList(BrowserCommand):
+    account_id: str = "browser-default"
     headless: bool = False
     priority: int = PRIORITY_METADATA
 
 
 @dataclass(frozen=True, slots=True)
 class SyncVideoDetails(BrowserCommand):
+    account_id: str = "browser-default"
     videos: tuple[dict[str, Any], ...] = ()
     headless: bool = False
     priority: int = PRIORITY_METADATA
@@ -65,6 +69,7 @@ class ObserveMediaBundle(BrowserCommand):
 
 @dataclass(frozen=True, slots=True)
 class CloseSession(BrowserCommand):
+    account_id: str | None = None
     priority: int = PRIORITY_SHUTDOWN
 
 

@@ -317,7 +317,27 @@ douyin-mcp status
 
 </details>
 
-所有工具使用内部账号键 `browser-default`，Agent 无需传递账号 ID。常见业务状态包括 `completed`、`partial`、`cache_hit` 和 `user_action_required`。
+浏览器、同步、查询、导出和文案工具均支持 `account_id`。单账号安装可以继续省略该参数：
+
+- 现有 `browser-default` 继续使用 `DOUYIN_BROWSER_PROFILE_DIR`，历史登录态和缓存无需迁移。
+- 命名账号（例如 `xiaojing`、`gaobei`）分别使用
+  `DOUYIN_BROWSER_PROFILES_DIR/<account_id>`，登录态和 profile 锁互相隔离。
+- 本地只识别到一个账号时，省略 `account_id` 会自动选中该账号。
+- 本地存在多个账号时，省略 `account_id` 会返回校验错误和
+  `available_accounts`，不会静默使用默认账号。
+
+示例：
+
+```text
+douyin_browser_login_start(account_id="xiaojing")
+douyin_browser_login_start(account_id="gaobei")
+douyin_browser_sync_creator_data(account_id="xiaojing")
+douyin_browser_get_status(account_id="gaobei")
+```
+
+同步浏览器命令仍由单一 Playwright owner 线程排队执行，但两个账号可以同时保持
+独立登录态；本地缓存查询不需要切换登录。常见业务状态包括 `completed`、
+`partial`、`cache_hit` 和 `user_action_required`。
 
 ### 文案流水线配置
 
@@ -540,6 +560,7 @@ Copy-Item .env.example .env
 
 ```text
 src/douyin_creator_mcp/
+├── accounts.py               # 账号 ID 校验与隔离 profile 路径
 ├── server.py                 # 无副作用 FastMCP 构造
 ├── runtime.py                # 实例锁、迁移、executor/worker 生命周期
 ├── cli.py                    # 用户 CLI
