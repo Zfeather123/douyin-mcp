@@ -24,7 +24,7 @@ from ..browser.extractors import (
     extract_page_snapshot,
 )
 from ..browser.profile_lock import ProfileLock
-from ..browser.session import BrowserSession
+from ..browser.session import BrowserSession, _load_sync_playwright
 from ..config import Settings
 from ..content.models import EphemeralRequest, MediaCandidate
 from ..errors import CONFIGURATION_ERROR, VALIDATION_ERROR, AppError
@@ -70,6 +70,8 @@ class DefaultBrowserBackend:
         self.profile_locks: dict[str, ProfileLock] = {}
         self.thread_id = threading.get_ident()
         self._verified_targets: dict[tuple[str, str], dict[str, Any]] = {}
+        self._playwright_manager: Any | None = None
+        self._playwright: Any | None = None
 
     @property
     def session(self) -> BrowserSession | None:
@@ -103,22 +105,54 @@ class DefaultBrowserBackend:
                 self.settings.douyin_profile_lock_filename,
             )
             lock.acquire()
+            try:
+                playwright = self._ensure_playwright()
+                session = BrowserSession(
+                    self.settings,
+                    headless=headless,
+                    profile_dir=profile_dir,
+                    playwright=playwright,
+                )
+            except BaseException:
+                lock.release()
+                raise
             self.profile_locks[account_id] = lock
-            session = BrowserSession(
-                self.settings,
-                headless=headless,
-                profile_dir=profile_dir,
-            )
             self.sessions[account_id] = session
         return session
 
+    def _ensure_playwright(self) -> Any:
+        """Start one sync Playwright runtime for every account context."""
+        if self._playwright is None:
+            manager_factory = _load_sync_playwright()
+            manager = manager_factory()
+            try:
+                playwright = manager.start()
+            except BaseException:
+                stop = getattr(manager, "stop", None)
+                if callable(stop):
+                    stop()
+                raise
+            self._playwright_manager = manager
+            self._playwright = playwright
+        return self._playwright
+
     def handle(self, command: BrowserCommand) -> Any:
         if isinstance(command, LoginStart):
-            session = self._ensure_session(command.account_id, headless=command.headless)
-            page = session.open_creator_home()
-            snapshot = extract_page_snapshot(page)
+            account_id = validate_account_id(command.account_id)
+            session_was_present = account_id in self.sessions
+            session = self._ensure_session(account_id, headless=command.headless)
+            try:
+                page = session.open_creator_home()
+                snapshot = extract_page_snapshot(page)
+            except BaseException:
+                # A failed first launch must be fully transactional. Otherwise
+                # the dead session and its profile lock poison every retry in
+                # this process (and can block a replacement process too).
+                if not session_was_present or not session.is_running:
+                    self.close(account_id)
+                raise
             result = {
-                "account_id": command.account_id,
+                "account_id": account_id,
                 "browser_running": session.is_running,
                 "login_status": snapshot["login_status"],
                 "title": snapshot["title"],
@@ -328,6 +362,12 @@ class DefaultBrowserBackend:
             finally:
                 if lock is not None:
                     lock.release()
+        if account_id is None:
+            playwright = self._playwright
+            self._playwright = None
+            self._playwright_manager = None
+            if playwright is not None:
+                playwright.stop()
             for key in [
                 key for key in self._verified_targets if key[0] == current_id
             ]:
