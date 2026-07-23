@@ -103,47 +103,6 @@ class BrowserSession:
     def open_creator_home(self) -> Any:
         return self.open_page(self.settings.douyin_creator_home_url)
 
-    def capture_login_qr(self, page: Any) -> bytes:
-        """Capture the login QR without persisting it to disk."""
-        selectors = (
-            '[class*="qrcode" i] canvas',
-            '[class*="qrcode" i] img',
-            '[class*="qr-code" i] canvas',
-            '[class*="qr-code" i] img',
-            '[class*="scan" i] canvas',
-            'canvas',
-            'img[src^="data:image"]',
-        )
-        candidates: list[tuple[int, float, Any]] = []
-        for selector_rank, selector in enumerate(selectors):
-            locator = page.locator(selector)
-            for index in range(min(locator.count(), 20)):
-                node = locator.nth(index)
-                try:
-                    box = node.bounding_box()
-                except Exception:
-                    continue
-                if not box:
-                    continue
-                width = float(box.get("width") or 0)
-                height = float(box.get("height") or 0)
-                if not (120 <= width <= 600 and 120 <= height <= 600):
-                    continue
-                ratio = width / height if height else 0
-                if not 0.72 <= ratio <= 1.38:
-                    continue
-                candidates.append((selector_rank, abs(1 - ratio), node))
-            if candidates:
-                break
-
-        if candidates:
-            _, _, selected = min(candidates, key=lambda item: (item[0], item[1]))
-            return selected.screenshot(type="png")
-
-        # Login pages contain no creator analytics. A full-page fallback makes
-        # selector drift recoverable while still avoiding any persistent file.
-        return page.screenshot(type="png", full_page=True)
-
     def open_creator_video_page(self) -> Any:
         return self.open_page(self.settings.douyin_creator_video_url)
 

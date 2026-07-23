@@ -303,7 +303,6 @@ douyin-mcp status
 | 工具 | 用途 |
 |---|---|
 | `douyin_browser_login_start` | 打开可见 Chrome，处理首次登录或重新登录 |
-| `douyin_browser_login_qr` | 在无图形服务环境为指定账号返回二维码并保持独立登录会话 |
 | `douyin_browser_login_status` | 查询当前浏览器登录状态 |
 | `douyin_browser_get_status` | 查询新鲜度、任务、覆盖率、账号绑定和 profile 锁 |
 | `douyin_browser_sync_if_needed` | 按 TTL 同步列表、详情或全部数据 |
@@ -344,17 +343,9 @@ douyin-mcp status
 ```text
 douyin_browser_login_start(account_id="xiaojing")
 douyin_browser_login_start(account_id="gaobei")
-douyin_browser_login_qr(account_id="gaobei")
 douyin_browser_sync_creator_data(account_id="xiaojing")
 douyin_browser_get_status(account_id="gaobei")
 ```
-
-聊天 Agent 需要展示登录码时，固定调用
-`douyin_browser_login_qr(account_id="gaobei")`，并直接渲染工具返回的图片内容。
-不要改用 `douyin_browser_login_start`，也不要把二维码另存后再通过聊天附件中转：
-前者依赖图形显示服务，后者会让二维码展示与登录会话分离。扫码后调用
-`douyin_browser_login_status(account_id="gaobei")`，只有返回 `logged_in` 且后台账号
-标识与目标账号一致时才视为绑定完成。
 
 同步浏览器命令仍由单一 Playwright owner 线程排队执行，但两个账号可以同时保持
 独立登录态；本地缓存查询不需要切换登录。常见业务状态包括 `completed`、

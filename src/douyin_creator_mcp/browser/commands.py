@@ -26,7 +26,6 @@ class BrowserCommand:
 class LoginStart(BrowserCommand):
     account_id: str = "browser-default"
     headless: bool = False
-    capture_qr: bool = False
     priority: int = PRIORITY_USER
 
 

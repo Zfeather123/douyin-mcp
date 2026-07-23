@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
@@ -22,7 +21,6 @@ from douyin_creator_mcp.browser.executor import (
     DefaultBrowserBackend,
 )
 from douyin_creator_mcp.browser.profile_lock import ProfileLock
-from douyin_creator_mcp.browser.session import BrowserSession
 from douyin_creator_mcp.errors import AppError
 from douyin_creator_mcp.services.browser_service import BrowserService
 from douyin_creator_mcp.storage.db import Database
@@ -314,154 +312,6 @@ class MultiAccountTest(unittest.TestCase):
         self.assertNotIn("wanghuan-chat", backend.profile_locks)
         self.assertEqual(len(created_locks), 1)
         self.assertTrue(created_locks[0].released)
-
-    def test_async_caller_starts_browser_only_on_executor_thread(self) -> None:
-        caller_thread = threading.get_ident()
-        browser_threads: list[int] = []
-
-        class FakePage:
-            pass
-
-        class ThreadCheckingSession:
-            def __init__(
-                self,
-                settings: Settings,
-                headless: bool,
-                profile_dir: Path,
-                playwright: object,
-            ) -> None:
-                del settings, headless, profile_dir, playwright
-                self.is_running = False
-
-            def open_creator_home(self) -> FakePage:
-                browser_threads.append(threading.get_ident())
-                self.is_running = True
-                return FakePage()
-
-            def capture_login_qr(self, page: FakePage) -> bytes:
-                del page
-                browser_threads.append(threading.get_ident())
-                return b"qr-png"
-
-            def close(self) -> None:
-                self.is_running = False
-
-        snapshot = {
-            "login_status": "login_required",
-            "title": "抖音创作者中心",
-            "source_url": "https://creator.douyin.com/",
-            "video_candidates": [],
-        }
-
-        async def call_from_event_loop() -> dict[str, object]:
-            self.assertIs(asyncio.get_running_loop(), asyncio.get_event_loop())
-            return service.login_qr("wanghuan-chat")
-
-        with (
-            patch(
-                "douyin_creator_mcp.browser.executor._load_sync_playwright",
-                return_value=lambda: FakePlaywrightManager(),
-            ),
-            patch(
-                "douyin_creator_mcp.browser.executor.BrowserSession",
-                ThreadCheckingSession,
-            ),
-            patch(
-                "douyin_creator_mcp.browser.executor.extract_page_snapshot",
-                return_value=snapshot,
-            ),
-            patch(
-                "douyin_creator_mcp.services.browser_service."
-                "require_platform_risk_acknowledgement"
-            ),
-        ):
-            executor = BrowserExecutor(self.settings, database=self.db)
-            service = BrowserService(
-                self.settings,
-                self.db,
-                browser_executor=executor,
-            )
-            try:
-                result = asyncio.run(call_from_event_loop())
-            finally:
-                executor.shutdown()
-
-        self.assertEqual(result["qr_image"], b"qr-png")
-        self.assertTrue(browser_threads)
-        self.assertTrue(
-            all(thread_id != caller_thread for thread_id in browser_threads)
-        )
-        self.assertEqual(set(browser_threads), {executor.thread_id})
-
-    def test_qr_capture_prefers_square_login_element(self) -> None:
-        expected = b"qr-png"
-        test_case = self
-
-        class FakeNode:
-            def bounding_box(self) -> dict[str, int]:
-                return {"width": 240, "height": 240}
-
-            def screenshot(self, type: str) -> bytes:
-                test_case.assertEqual(type, "png")
-                return expected
-
-        class FakeLocator:
-            def count(self) -> int:
-                return 1
-
-            def nth(self, index: int) -> FakeNode:
-                test_case.assertEqual(index, 0)
-                return FakeNode()
-
-        class FakePage:
-            def locator(self, selector: str) -> FakeLocator:
-                test_case.assertIn("qrcode", selector)
-                return FakeLocator()
-
-            def screenshot(self, **kwargs: object) -> bytes:
-                raise AssertionError("full-page fallback should not be used")
-
-        session = BrowserSession(self.settings, headless=True)
-        self.assertEqual(session.capture_login_qr(FakePage()), expected)
-
-    def test_login_qr_uses_named_headless_profile(self) -> None:
-        class FakeExecutor:
-            def __init__(self) -> None:
-                self.command: LoginStart | None = None
-
-            def execute(self, command: LoginStart) -> dict[str, object]:
-                self.command = command
-                return {
-                    "account_id": command.account_id,
-                    "browser_running": True,
-                    "login_status": "login_required",
-                    "title": "抖音创作者中心",
-                    "source_url": "https://creator.douyin.com/",
-                    "video_candidate_count": 0,
-                    "qr_image": b"qr-png",
-                }
-
-        executor = FakeExecutor()
-        service = BrowserService(
-            self.settings,
-            self.db,
-            browser_executor=executor,
-        )
-        with patch(
-            "douyin_creator_mcp.services.browser_service."
-            "require_platform_risk_acknowledgement"
-        ):
-            result = service.login_qr("gaobei")
-        self.assertIsNotNone(executor.command)
-        self.assertEqual(executor.command.account_id, "gaobei")
-        self.assertTrue(executor.command.headless)
-        self.assertTrue(executor.command.capture_qr)
-        self.assertEqual(result["qr_image"], b"qr-png")
-
-    def test_executor_allows_ephemeral_qr_bytes(self) -> None:
-        BrowserExecutor._validate_pure_value(
-            {"account_id": "gaobei", "qr_image": b"qr-png"}
-        )
 
     def test_profile_lock_reclaims_reused_sandbox_pid(self) -> None:
         profile_dir = self.settings.douyin_browser_profiles_dir / "gaobei"
