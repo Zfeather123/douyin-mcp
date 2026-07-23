@@ -19,11 +19,12 @@ from zoneinfo import ZoneInfo
 from ..accounts import browser_profile_dir, validate_account_id
 from ..browser.extractors import (
     collect_all_video_cards,
+    extract_account_analytics,
     extract_detail_metrics,
     extract_page_snapshot,
 )
 from ..browser.profile_lock import ProfileLock
-from ..browser.session import BrowserSession
+from ..browser.session import BrowserSession, _load_sync_playwright
 from ..config import Settings
 from ..content.models import EphemeralRequest, MediaCandidate
 from ..errors import CONFIGURATION_ERROR, VALIDATION_ERROR, AppError
@@ -38,6 +39,7 @@ from .commands import (
     ObserveMediaBundle,
     Shutdown,
     SyncCreatorList,
+    SyncAccountAnalytics,
     SyncVideoDetails,
     VerifyAccount,
 )
@@ -68,6 +70,8 @@ class DefaultBrowserBackend:
         self.profile_locks: dict[str, ProfileLock] = {}
         self.thread_id = threading.get_ident()
         self._verified_targets: dict[tuple[str, str], dict[str, Any]] = {}
+        self._playwright_manager: Any | None = None
+        self._playwright: Any | None = None
 
     @property
     def session(self) -> BrowserSession | None:
@@ -101,22 +105,54 @@ class DefaultBrowserBackend:
                 self.settings.douyin_profile_lock_filename,
             )
             lock.acquire()
+            try:
+                playwright = self._ensure_playwright()
+                session = BrowserSession(
+                    self.settings,
+                    headless=headless,
+                    profile_dir=profile_dir,
+                    playwright=playwright,
+                )
+            except BaseException:
+                lock.release()
+                raise
             self.profile_locks[account_id] = lock
-            session = BrowserSession(
-                self.settings,
-                headless=headless,
-                profile_dir=profile_dir,
-            )
             self.sessions[account_id] = session
         return session
 
+    def _ensure_playwright(self) -> Any:
+        """Start one sync Playwright runtime for every account context."""
+        if self._playwright is None:
+            manager_factory = _load_sync_playwright()
+            manager = manager_factory()
+            try:
+                playwright = manager.start()
+            except BaseException:
+                stop = getattr(manager, "stop", None)
+                if callable(stop):
+                    stop()
+                raise
+            self._playwright_manager = manager
+            self._playwright = playwright
+        return self._playwright
+
     def handle(self, command: BrowserCommand) -> Any:
         if isinstance(command, LoginStart):
-            session = self._ensure_session(command.account_id, headless=command.headless)
-            page = session.open_creator_home()
-            snapshot = extract_page_snapshot(page)
+            account_id = validate_account_id(command.account_id)
+            session_was_present = account_id in self.sessions
+            session = self._ensure_session(account_id, headless=command.headless)
+            try:
+                page = session.open_creator_home()
+                snapshot = extract_page_snapshot(page)
+            except BaseException:
+                # A failed first launch must be fully transactional. Otherwise
+                # the dead session and its profile lock poison every retry in
+                # this process (and can block a replacement process too).
+                if not session_was_present or not session.is_running:
+                    self.close(account_id)
+                raise
             result = {
-                "account_id": command.account_id,
+                "account_id": account_id,
                 "browser_running": session.is_running,
                 "login_status": snapshot["login_status"],
                 "title": snapshot["title"],
@@ -186,6 +222,25 @@ class DefaultBrowserBackend:
                     }
                 )
             return {"details": details}
+        if isinstance(command, SyncAccountAnalytics):
+            session = self._ensure_session(headless=command.headless)
+            videos, load_stats = collect_all_video_cards(
+                session.open_creator_video_page()
+            )
+            declared = load_stats.get("page_total_video_count")
+            loaded = int(load_stats.get("loaded_card_count") or 0)
+            if declared is not None and loaded != int(declared):
+                raise AppError(
+                    VALIDATION_ERROR,
+                    "Creator inventory is incomplete; account analytics were not collected.",
+                    retryable=True,
+                )
+            self._verify_account_binding(command.account_id, videos)
+            snapshots = []
+            for scope in command.scopes:
+                page = session.open_account_analytics(scope)
+                snapshots.append(extract_account_analytics(page, scope))
+            return {"snapshots": snapshots}
         if isinstance(command, VerifyAccount):
             session = self._ensure_session(command.account_id)
             page = session.open_creator_video_page()
@@ -307,6 +362,12 @@ class DefaultBrowserBackend:
             finally:
                 if lock is not None:
                     lock.release()
+        if account_id is None:
+            playwright = self._playwright
+            self._playwright = None
+            self._playwright_manager = None
+            if playwright is not None:
+                playwright.stop()
             for key in [
                 key for key in self._verified_targets if key[0] == current_id
             ]:
@@ -610,7 +671,7 @@ class BrowserExecutor:
 
     @classmethod
     def _validate_pure_value(cls, value: Any) -> None:
-        if value is None or isinstance(value, (str, int, float, bool)):
+        if value is None or isinstance(value, (str, int, float, bool, bytes)):
             return
         if isinstance(value, dict):
             for key, item in value.items():

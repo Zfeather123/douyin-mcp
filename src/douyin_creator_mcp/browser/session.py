@@ -35,6 +35,7 @@ class BrowserSession:
         settings: Settings,
         headless: bool | None = None,
         profile_dir: Any | None = None,
+        playwright: Any | None = None,
     ) -> None:
         self.settings = settings
         self.profile_dir = (
@@ -44,7 +45,8 @@ class BrowserSession:
         )
         self._headless = settings.douyin_browser_headless if headless is None else headless
         self._playwright_manager: Any | None = None
-        self._playwright: Any | None = None
+        self._playwright: Any | None = playwright
+        self._owns_playwright = playwright is None
         self._context: Any | None = None
 
     @property
@@ -67,9 +69,10 @@ class BrowserSession:
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
-        manager_factory = _load_sync_playwright()
-        self._playwright_manager = manager_factory()
-        self._playwright = self._playwright_manager.start()
+        if self._playwright is None:
+            manager_factory = _load_sync_playwright()
+            self._playwright_manager = manager_factory()
+            self._playwright = self._playwright_manager.start()
 
         launch_options: dict[str, Any] = {
             "user_data_dir": str(self.profile_dir),
@@ -83,7 +86,8 @@ class BrowserSession:
                 **launch_options
             )
         except Exception:
-            self._playwright.stop()
+            if self._owns_playwright:
+                self._playwright.stop()
             self._playwright = None
             self._playwright_manager = None
             raise
@@ -142,6 +146,22 @@ class BrowserSession:
 
     def open_creator_video_page(self) -> Any:
         return self.open_page(self.settings.douyin_creator_video_url)
+
+    def open_account_analytics(self, scope: str) -> Any:
+        urls = {
+            "overview": "https://creator.douyin.com/creator-micro/data-center/operation",
+            "content": "https://creator.douyin.com/creator-micro/data-center/content",
+            "audience": "https://creator.douyin.com/creator-micro/data/stats/follower/portrait",
+        }
+        try:
+            url = urls[scope]
+        except KeyError as exc:
+            raise AppError(
+                CONFIGURATION_ERROR,
+                f"Unsupported account analytics scope: {scope}",
+                retryable=False,
+            ) from exc
+        return self.open_page(url)
 
     def open_video_detail(self, url: str) -> Any:
         return self.open_page(url)
@@ -237,7 +257,7 @@ class BrowserSession:
             if context is not None:
                 context.close()
         finally:
-            if playwright is not None:
+            if self._owns_playwright and playwright is not None:
                 playwright.stop()
 
     def _page(self) -> Any:

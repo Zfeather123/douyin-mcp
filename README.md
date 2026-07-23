@@ -56,6 +56,10 @@
 - Google Chrome
 - 一个支持 MCP 和终端操作的 Agent
 
+基础 Python 包由 `pyproject.toml` 统一声明并由安装器安装。Chrome 是独立的系统
+运行依赖，`doctor` 会检查配置的浏览器通道是否存在；项目安装器还需要当前 Python
+具备 `venv` 和 `ensurepip`，缺失时会在修改环境前明确报出所需的系统包。
+
 视频文案是首次安装后的可选功能；需要时只要告诉 Agent“启用视频文案”，由它说明额外依赖、下载和磁盘占用，并在取得同意后完成配置。
 
 ### 推荐：让 Agent 完成安装和配置
@@ -257,6 +261,10 @@ douyin-mcp videos --limit 20
 douyin-mcp details --recent-limit 20
 douyin-mcp details --recent-limit 20 --cursor 10
 
+# 同步并查询账号总览、作品汇总和粉丝画像
+douyin-mcp account-sync --mode background_first
+douyin-mcp account-data --history
+
 # 查询单条作品表现
 douyin-mcp performance <video_id> --period 30d
 
@@ -276,6 +284,8 @@ douyin-mcp status
 | `status` | 查看登录、缓存、同步任务和覆盖率 |
 | `sync` | 同步作品列表和列表页指标 |
 | `details` | 分批同步指定或近期作品详情 |
+| `account-sync` | 只读同步账号总览、作品汇总和粉丝画像 |
+| `account-data` | 查询账号级指标、平台可用性和历史快照 |
 | `videos` | 分页查询本地作品 |
 | `performance` | 查询单条作品快照和派生指标 |
 | `export` | 导出 JSON 或 CSV |
@@ -285,7 +295,7 @@ douyin-mcp status
 
 ### MCP 工具
 
-默认入口保留原有 13 个浏览器数据工具，并新增 9 个本地视频文案流水线工具。
+默认入口提供 15 个浏览器数据工具和 9 个本地视频文案流水线工具。
 
 <details open>
 <summary><strong>查看 MCP 工具列表</strong></summary>
@@ -299,6 +309,8 @@ douyin-mcp status
 | `douyin_browser_sync_if_needed` | 按 TTL 同步列表、详情或全部数据 |
 | `douyin_browser_sync_creator_data` | 同步作品列表和列表指标 |
 | `douyin_browser_sync_video_details` | 分批同步指定或近期作品详情指标 |
+| `douyin_browser_sync_account_analytics` | 只读同步账号总览、作品汇总和粉丝画像 |
+| `douyin_browser_get_account_analytics` | 查询账号级指标、平台可用性和历史快照 |
 | `douyin_browser_list_videos` | 分页查询作品和最新指标 |
 | `douyin_browser_get_video_performance` | 查询单作品快照和派生指标 |
 | `douyin_browser_compare_videos` | 对比 2～20 条作品 |
@@ -336,6 +348,13 @@ douyin_browser_login_qr(account_id="gaobei")
 douyin_browser_sync_creator_data(account_id="xiaojing")
 douyin_browser_get_status(account_id="gaobei")
 ```
+
+聊天 Agent 需要展示登录码时，固定调用
+`douyin_browser_login_qr(account_id="gaobei")`，并直接渲染工具返回的图片内容。
+不要改用 `douyin_browser_login_start`，也不要把二维码另存后再通过聊天附件中转：
+前者依赖图形显示服务，后者会让二维码展示与登录会话分离。扫码后调用
+`douyin_browser_login_status(account_id="gaobei")`，只有返回 `logged_in` 且后台账号
+标识与目标账号一致时才视为绑定完成。
 
 同步浏览器命令仍由单一 Playwright owner 线程排队执行，但两个账号可以同时保持
 独立登录态；本地缓存查询不需要切换登录。常见业务状态包括 `completed`、

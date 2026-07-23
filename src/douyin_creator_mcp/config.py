@@ -30,6 +30,7 @@ class Settings:
     douyin_profile_lock_filename: str = ".douyin-mcp.lock"
     douyin_list_parser_version: str = "creator-manage-v2"
     douyin_detail_parser_version: str = "creator-detail-v2"
+    douyin_account_parser_version: str = "creator-account-v1"
     douyin_creator_home_url: str = "https://creator.douyin.com/"
     douyin_creator_video_url: str = "https://creator.douyin.com/creator-micro/content/manage"
     transcript_ingestion_enabled: bool = False
@@ -138,6 +139,9 @@ def load_settings(
         ),
         douyin_detail_parser_version=_get(
             merged, "DOUYIN_DETAIL_PARSER_VERSION", "creator-detail-v2"
+        ),
+        douyin_account_parser_version=_get(
+            merged, "DOUYIN_ACCOUNT_PARSER_VERSION", "creator-account-v1"
         ),
         douyin_creator_home_url=_get(
             merged,

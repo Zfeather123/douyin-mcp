@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,12 +15,27 @@ from douyin_creator_mcp.accounts import (
     validate_account_id,
 )
 from douyin_creator_mcp.config import Settings
+from douyin_creator_mcp.cli import _configured_browser_available
 from douyin_creator_mcp.browser.commands import LoginStart
-from douyin_creator_mcp.browser.executor import DefaultBrowserBackend
+from douyin_creator_mcp.browser.executor import (
+    BrowserExecutor,
+    DefaultBrowserBackend,
+)
+from douyin_creator_mcp.browser.profile_lock import ProfileLock
 from douyin_creator_mcp.browser.session import BrowserSession
 from douyin_creator_mcp.errors import AppError
 from douyin_creator_mcp.services.browser_service import BrowserService
 from douyin_creator_mcp.storage.db import Database
+
+
+class FakePlaywright:
+    def stop(self) -> None:
+        return None
+
+
+class FakePlaywrightManager:
+    def start(self) -> FakePlaywright:
+        return FakePlaywright()
 
 
 class MultiAccountTest(unittest.TestCase):
@@ -109,9 +128,13 @@ class MultiAccountTest(unittest.TestCase):
 
         class FakeSession:
             def __init__(
-                self, settings: Settings, headless: bool, profile_dir: Path
+                self,
+                settings: Settings,
+                headless: bool,
+                profile_dir: Path,
+                playwright: object,
             ) -> None:
-                del settings, headless
+                del settings, headless, playwright
                 self.profile_dir = profile_dir
                 self.is_running = True
                 self.closed = False
@@ -148,6 +171,10 @@ class MultiAccountTest(unittest.TestCase):
                 FakeSession,
             ),
             patch(
+                "douyin_creator_mcp.browser.executor._load_sync_playwright",
+                return_value=lambda: FakePlaywrightManager(),
+            ),
+            patch(
                 "douyin_creator_mcp.browser.executor.ProfileLock",
                 FakeLock,
             ),
@@ -170,6 +197,201 @@ class MultiAccountTest(unittest.TestCase):
             self.assertTrue(created[0].closed)
             self.assertFalse(created[1].closed)
             backend.close()
+
+    def test_multiple_accounts_share_one_playwright_runtime(self) -> None:
+        manager_starts: list[int] = []
+        injected_playwright: list[object] = []
+        shared_playwright = FakePlaywright()
+
+        class FakeManager:
+            def start(self) -> object:
+                manager_starts.append(threading.get_ident())
+                if len(manager_starts) > 1:
+                    raise RuntimeError(
+                        "It looks like you are using Playwright Sync API "
+                        "inside the asyncio loop."
+                    )
+                return shared_playwright
+
+        class FakeSession:
+            def __init__(
+                self,
+                settings: Settings,
+                headless: bool,
+                profile_dir: Path,
+                playwright: object,
+            ) -> None:
+                del settings, headless, profile_dir
+                injected_playwright.append(playwright)
+                self.is_running = True
+
+            def open_creator_home(self) -> object:
+                return object()
+
+            def close(self) -> None:
+                self.is_running = False
+
+        snapshot = {
+            "login_status": "logged_in",
+            "title": "抖音创作者中心",
+            "source_url": "https://creator.douyin.com/",
+            "video_candidates": [],
+        }
+        with (
+            patch(
+                "douyin_creator_mcp.browser.executor._load_sync_playwright",
+                return_value=lambda: FakeManager(),
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.BrowserSession",
+                FakeSession,
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.extract_page_snapshot",
+                return_value=snapshot,
+            ),
+        ):
+            backend = DefaultBrowserBackend(self.settings, self.db)
+            backend.handle(LoginStart(account_id=BROWSER_DEFAULT_ACCOUNT_ID))
+            backend.handle(LoginStart(account_id="wanghuan-chat", headless=True))
+            backend.close()
+
+        self.assertEqual(len(manager_starts), 1)
+        self.assertEqual(injected_playwright, [shared_playwright, shared_playwright])
+
+    def test_failed_first_launch_releases_profile_lock(self) -> None:
+        created_locks: list[object] = []
+
+        class FailingSession:
+            def __init__(
+                self,
+                settings: Settings,
+                headless: bool,
+                profile_dir: Path,
+                playwright: object,
+            ) -> None:
+                del settings, headless, profile_dir, playwright
+                self.is_running = False
+                self.closed = False
+
+            def open_creator_home(self) -> object:
+                raise RuntimeError("playwright launch failed")
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeLock:
+            def __init__(self, profile_dir: Path, filename: str) -> None:
+                del profile_dir, filename
+                self.released = False
+                created_locks.append(self)
+
+            def acquire(self) -> None:
+                return None
+
+            def release(self) -> None:
+                self.released = True
+
+        with (
+            patch(
+                "douyin_creator_mcp.browser.executor._load_sync_playwright",
+                return_value=lambda: FakePlaywrightManager(),
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.BrowserSession",
+                FailingSession,
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.ProfileLock",
+                FakeLock,
+            ),
+        ):
+            backend = DefaultBrowserBackend(self.settings, self.db)
+            with self.assertRaisesRegex(RuntimeError, "playwright launch failed"):
+                backend.handle(LoginStart(account_id="wanghuan-chat", headless=True))
+
+        self.assertNotIn("wanghuan-chat", backend.sessions)
+        self.assertNotIn("wanghuan-chat", backend.profile_locks)
+        self.assertEqual(len(created_locks), 1)
+        self.assertTrue(created_locks[0].released)
+
+    def test_async_caller_starts_browser_only_on_executor_thread(self) -> None:
+        caller_thread = threading.get_ident()
+        browser_threads: list[int] = []
+
+        class FakePage:
+            pass
+
+        class ThreadCheckingSession:
+            def __init__(
+                self,
+                settings: Settings,
+                headless: bool,
+                profile_dir: Path,
+                playwright: object,
+            ) -> None:
+                del settings, headless, profile_dir, playwright
+                self.is_running = False
+
+            def open_creator_home(self) -> FakePage:
+                browser_threads.append(threading.get_ident())
+                self.is_running = True
+                return FakePage()
+
+            def capture_login_qr(self, page: FakePage) -> bytes:
+                del page
+                browser_threads.append(threading.get_ident())
+                return b"qr-png"
+
+            def close(self) -> None:
+                self.is_running = False
+
+        snapshot = {
+            "login_status": "login_required",
+            "title": "抖音创作者中心",
+            "source_url": "https://creator.douyin.com/",
+            "video_candidates": [],
+        }
+
+        async def call_from_event_loop() -> dict[str, object]:
+            self.assertIs(asyncio.get_running_loop(), asyncio.get_event_loop())
+            return service.login_qr("wanghuan-chat")
+
+        with (
+            patch(
+                "douyin_creator_mcp.browser.executor._load_sync_playwright",
+                return_value=lambda: FakePlaywrightManager(),
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.BrowserSession",
+                ThreadCheckingSession,
+            ),
+            patch(
+                "douyin_creator_mcp.browser.executor.extract_page_snapshot",
+                return_value=snapshot,
+            ),
+            patch(
+                "douyin_creator_mcp.services.browser_service."
+                "require_platform_risk_acknowledgement"
+            ),
+        ):
+            executor = BrowserExecutor(self.settings, database=self.db)
+            service = BrowserService(
+                self.settings,
+                self.db,
+                browser_executor=executor,
+            )
+            try:
+                result = asyncio.run(call_from_event_loop())
+            finally:
+                executor.shutdown()
+
+        self.assertEqual(result["qr_image"], b"qr-png")
+        self.assertTrue(browser_threads)
+        self.assertTrue(
+            all(thread_id != caller_thread for thread_id in browser_threads)
+        )
+        self.assertEqual(set(browser_threads), {executor.thread_id})
 
     def test_qr_capture_prefers_square_login_element(self) -> None:
         expected = b"qr-png"
@@ -235,6 +457,50 @@ class MultiAccountTest(unittest.TestCase):
         self.assertTrue(executor.command.headless)
         self.assertTrue(executor.command.capture_qr)
         self.assertEqual(result["qr_image"], b"qr-png")
+
+    def test_executor_allows_ephemeral_qr_bytes(self) -> None:
+        BrowserExecutor._validate_pure_value(
+            {"account_id": "gaobei", "qr_image": b"qr-png"}
+        )
+
+    def test_profile_lock_reclaims_reused_sandbox_pid(self) -> None:
+        profile_dir = self.settings.douyin_browser_profiles_dir / "gaobei"
+        profile_dir.mkdir(parents=True)
+        lock_path = profile_dir / ".douyin-mcp.lock"
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "owner": "interrupted-turn",
+                    "pid": os.getpid(),
+                    "process_start_ticks": "previous-process",
+                    "acquired_at": "2026-07-23T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        lock = ProfileLock(profile_dir, stale_grace_seconds=3600)
+        with (
+            patch.object(ProfileLock, "_pid_is_alive", return_value=True),
+            patch.object(
+                ProfileLock,
+                "_linux_process_start_ticks",
+                return_value="current-process",
+            ),
+        ):
+            lock.acquire()
+        self.assertTrue(lock._acquired)
+        lock.release()
+        self.assertFalse(lock_path.exists())
+
+    def test_doctor_checks_configured_browser_executable(self) -> None:
+        with patch("douyin_creator_mcp.cli.shutil.which") as which:
+            which.side_effect = lambda name: (
+                "/usr/bin/google-chrome" if name == "google-chrome" else None
+            )
+            self.assertTrue(_configured_browser_available("chrome"))
+            self.assertFalse(_configured_browser_available("msedge"))
+            self.assertFalse(_configured_browser_available("unknown-channel"))
 
 
 if __name__ == "__main__":

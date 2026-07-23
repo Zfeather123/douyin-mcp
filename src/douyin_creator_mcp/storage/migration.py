@@ -77,6 +77,14 @@ MIGRATION_COLUMNS = {
     3: {
         "videos": {"visibility", "content_kind", "classification_source"},
     },
+    4: {
+        "account_analytics_snapshots": {
+            "id", "sync_job_id", "account_id", "scope", "source_url",
+            "captured_at", "period_label", "availability", "unavailable_reason",
+            "metrics_json", "sections_json", "missing_reason_json",
+            "parser_version", "created_at",
+        },
+    },
 }
 
 MIGRATION_INDEXES = {
@@ -90,6 +98,10 @@ MIGRATION_INDEXES = {
         "uq_active_video_content_job", "idx_run_items_job", "idx_content_jobs_claim",
         "uq_job_transcription_asset", "uq_video_current_transcript",
         "idx_transcript_segments_page",
+    },
+    4: {
+        "idx_account_analytics_account_scope_time",
+        "idx_account_analytics_job",
     },
 }
 

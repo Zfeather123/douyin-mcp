@@ -35,13 +35,15 @@ class ProfileLock:
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(
-            {
-                "owner": self.owner,
-                "pid": os.getpid(),
-                "acquired_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            }
-        ).encode("utf-8")
+        lock_detail: dict[str, Any] = {
+            "owner": self.owner,
+            "pid": os.getpid(),
+            "acquired_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+        process_start_ticks = self._linux_process_start_ticks(os.getpid())
+        if process_start_ticks is not None:
+            lock_detail["process_start_ticks"] = process_start_ticks
+        payload = json.dumps(lock_detail).encode("utf-8")
 
         for attempt in range(2):
             try:
@@ -93,7 +95,18 @@ class ProfileLock:
                 owner_alive = self._pid_is_alive(pid)
                 if owner_alive is False:
                     stale = True
-                elif owner_alive is True or owner_alive is None:
+                elif owner_alive is True:
+                    recorded_start_ticks = detail.get("process_start_ticks")
+                    current_start_ticks = self._linux_process_start_ticks(pid)
+                    if (
+                        isinstance(recorded_start_ticks, str)
+                        and current_start_ticks is not None
+                        and recorded_start_ticks != current_start_ticks
+                    ):
+                        stale = True
+                    else:
+                        return False
+                elif owner_alive is None:
                     return False
 
         if not stale:
@@ -133,6 +146,22 @@ class ProfileLock:
                 return True
             return None
         return True
+
+    @staticmethod
+    def _linux_process_start_ticks(pid: int) -> str | None:
+        """Identify a Linux process even when a later sandbox reuses its PID."""
+        if os.name == "nt" or pid <= 0:
+            return None
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        command_end = raw.rfind(")")
+        if command_end < 0:
+            return None
+        fields_after_command = raw[command_end + 2 :].split()
+        # proc_pid_stat(5): field 22 is starttime; field 3 is index 0 here.
+        return fields_after_command[19] if len(fields_after_command) > 19 else None
 
     @staticmethod
     def _windows_pid_is_alive(pid: int) -> bool | None:

@@ -32,7 +32,13 @@ from ..browser.extractors import (
     extract_detail_metrics,
     extract_page_snapshot,
 )
-from ..browser.commands import LoginStart, LoginStatus, SyncCreatorList, SyncVideoDetails
+from ..browser.commands import (
+    LoginStart,
+    LoginStatus,
+    SyncAccountAnalytics,
+    SyncCreatorList,
+    SyncVideoDetails,
+)
 from ..browser.executor import BrowserExecutor
 from ..browser.profile_lock import ProfileLock
 from ..browser.session import BrowserSession
@@ -56,6 +62,7 @@ from .metrics import FORMULA_VERSION, compute_derived_metrics, percentile_rank
 
 LIST_SOURCE = "browser_list"
 DETAIL_SOURCE = "browser_detail"
+ACCOUNT_ANALYTICS_SCOPES = ("overview", "content", "audience")
 
 
 def utc_now_iso() -> str:
@@ -684,6 +691,237 @@ class BrowserService:
                 self.close_browser(account_id)
 
     # Query and analysis ----------------------------------------------
+
+    def sync_account_analytics(
+        self,
+        scopes: list[str] | None = None,
+        mode: str = "background_first",
+        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+    ) -> dict[str, Any]:
+        """Collect read-only account, content and audience aggregates."""
+        require_platform_risk_acknowledgement(self.settings.data_dir)
+        self._validate_mode(mode)
+        requested = tuple(scopes or ACCOUNT_ANALYTICS_SCOPES)
+        if not requested or len(set(requested)) != len(requested):
+            raise AppError(
+                VALIDATION_ERROR,
+                "scopes must be a non-empty list without duplicates.",
+            )
+        unsupported = sorted(set(requested) - set(ACCOUNT_ANALYTICS_SCOPES))
+        if unsupported:
+            raise AppError(
+                VALIDATION_ERROR,
+                f"Unsupported account analytics scopes: {', '.join(unsupported)}",
+            )
+        job_id = self._start_job(
+            account_id,
+            "browser_sync_account_analytics",
+            self.settings.douyin_account_parser_version,
+        )
+        captured_at = utc_now_iso()
+        try:
+            access = (
+                self._browser_access()
+                if self._browser_executor is None
+                else nullcontext()
+            )
+            with access:
+                if self._browser_executor is not None:
+                    result = self._browser_executor.execute(
+                        SyncAccountAnalytics(
+                            account_id=account_id,
+                            scopes=requested,
+                            headless=mode == "background_first",
+                        )
+                    )
+                    snapshots = result["snapshots"]
+                else:
+                    session = self._get_session(
+                        headless=mode == "background_first"
+                    )
+                    videos, load_stats = collect_all_video_cards(
+                        session.open_creator_video_page()
+                    )
+                    declared = load_stats.get("page_total_video_count")
+                    if declared is not None and len(videos) != int(declared):
+                        raise AppError(
+                            DATA_NOT_AVAILABLE,
+                            "Creator inventory is incomplete; account identity could not be verified.",
+                            retryable=True,
+                        )
+                    self._verify_browser_account_identity(
+                        account_id, videos, captured_at
+                    )
+                    from ..browser.extractors import extract_account_analytics
+
+                    snapshots = [
+                        extract_account_analytics(
+                            session.open_account_analytics(scope), scope
+                        )
+                        for scope in requested
+                    ]
+
+            saved = []
+            warnings = []
+            for snapshot in snapshots:
+                snapshot_id = str(uuid.uuid4())
+                self.db.execute(
+                    """
+                    INSERT INTO account_analytics_snapshots (
+                      id, sync_job_id, account_id, scope, source_url,
+                      captured_at, period_label, availability,
+                      unavailable_reason, metrics_json, sections_json,
+                      missing_reason_json, parser_version, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        job_id,
+                        account_id,
+                        snapshot["scope"],
+                        snapshot["source_url"],
+                        captured_at,
+                        snapshot.get("period_label"),
+                        snapshot["availability"],
+                        snapshot.get("unavailable_reason"),
+                        json.dumps(snapshot["metrics"], ensure_ascii=False),
+                        json.dumps(snapshot["sections"], ensure_ascii=False),
+                        json.dumps(
+                            snapshot["missing_reasons"], ensure_ascii=False
+                        ),
+                        self.settings.douyin_account_parser_version,
+                        captured_at,
+                    ),
+                )
+                saved.append(
+                    {
+                        "snapshot_id": snapshot_id,
+                        "scope": snapshot["scope"],
+                        "availability": snapshot["availability"],
+                        "metric_count": len(snapshot["metrics"]),
+                        "section_count": len(snapshot["sections"]),
+                    }
+                )
+                if snapshot.get("unavailable_reason"):
+                    warnings.append(
+                        f"{snapshot['scope']}: {snapshot['unavailable_reason']}"
+                    )
+            coverage = {
+                item["scope"]: {
+                    "availability": item["availability"],
+                    "metric_count": item["metric_count"],
+                    "section_count": item["section_count"],
+                }
+                for item in saved
+            }
+            self._finish_job(
+                job_id,
+                "completed",
+                progress={
+                    "completed": len(saved),
+                    "total": len(requested),
+                    "phase": "account_analytics",
+                },
+                coverage=coverage,
+            )
+            return {
+                "status": "completed",
+                "sync_job_id": job_id,
+                "captured_at": captured_at,
+                "scopes": saved,
+                "coverage": coverage,
+                "warnings": warnings,
+            }
+        except Exception as exc:
+            self._finish_job(
+                job_id,
+                "failed",
+                error_type=(
+                    exc.error_type
+                    if isinstance(exc, AppError)
+                    else exc.__class__.__name__
+                ),
+                error_message=str(exc),
+            )
+            raise
+        finally:
+            if self.settings.douyin_browser_auto_close:
+                self.close_browser()
+
+    def get_account_analytics(
+        self,
+        scopes: list[str] | None = None,
+        include_history: bool = False,
+        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+    ) -> dict[str, Any]:
+        requested = tuple(scopes or ACCOUNT_ANALYTICS_SCOPES)
+        unsupported = sorted(set(requested) - set(ACCOUNT_ANALYTICS_SCOPES))
+        if unsupported:
+            raise AppError(
+                VALIDATION_ERROR,
+                f"Unsupported account analytics scopes: {', '.join(unsupported)}",
+            )
+        placeholders = ",".join("?" for _ in requested)
+        rows = self.db.query_all(
+            f"""
+            SELECT * FROM account_analytics_snapshots
+            WHERE account_id = ? AND scope IN ({placeholders})
+            ORDER BY captured_at DESC, rowid DESC
+            """,
+            tuple([account_id, *requested]),
+        )
+        parsed = [self._account_analytics_row(row) for row in rows]
+        latest: dict[str, dict[str, Any]] = {}
+        for row in parsed:
+            latest.setdefault(str(row["scope"]), row)
+        warnings = []
+        for scope in requested:
+            item = latest.get(scope)
+            if item is None:
+                warnings.append(f"{scope}: 尚无本地快照，请先同步。")
+            elif item["availability"] == "unavailable":
+                warnings.append(
+                    f"{scope}: {item.get('unavailable_reason') or '平台暂未提供数据'}"
+                )
+        captured_at = max(
+            (
+                str(item["captured_at"])
+                for item in latest.values()
+                if item.get("captured_at")
+            ),
+            default=None,
+        )
+        result = {
+            "status": "completed",
+            "account_id": account_id,
+            "latest": latest,
+            "freshness": self._freshness(
+                captured_at, self.settings.douyin_list_cache_ttl_hours
+            ),
+            "warnings": warnings,
+        }
+        if include_history:
+            result["history"] = parsed[:100]
+        return result
+
+    @staticmethod
+    def _account_analytics_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "sync_job_id": row["sync_job_id"],
+            "scope": row["scope"],
+            "source_url": row["source_url"],
+            "captured_at": row["captured_at"],
+            "period_label": row.get("period_label"),
+            "availability": row["availability"],
+            "unavailable_reason": row.get("unavailable_reason"),
+            "metrics": json.loads(row.get("metrics_json") or "{}"),
+            "sections": json.loads(row.get("sections_json") or "{}"),
+            "missing_reasons": json.loads(
+                row.get("missing_reason_json") or "{}"
+            ),
+            "parser_version": row["parser_version"],
+        }
 
     def list_videos(
         self,

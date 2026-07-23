@@ -52,6 +52,17 @@ class SyncVideoDetails(BrowserCommand):
 
 
 @dataclass(frozen=True, slots=True)
+class SyncAccountAnalytics(BrowserCommand):
+    account_id: str = ""
+    scopes: tuple[str, ...] = ("overview", "content", "audience")
+    headless: bool = True
+    deadline_monotonic: float = field(
+        default_factory=lambda: time.monotonic() + 120
+    )
+    priority: int = PRIORITY_ACCOUNT
+
+
+@dataclass(frozen=True, slots=True)
 class VerifyAccount(BrowserCommand):
     account_id: str = ""
     target_video_id: str | None = None
