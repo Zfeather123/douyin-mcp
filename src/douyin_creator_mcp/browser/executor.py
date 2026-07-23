@@ -610,7 +610,7 @@ class BrowserExecutor:
 
     @classmethod
     def _validate_pure_value(cls, value: Any) -> None:
-        if value is None or isinstance(value, (str, int, float, bool)):
+        if value is None or isinstance(value, (str, int, float, bool, bytes)):
             return
         if isinstance(value, dict):
             for key, item in value.items():

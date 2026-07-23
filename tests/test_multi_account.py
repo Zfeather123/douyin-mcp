@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +14,11 @@ from douyin_creator_mcp.accounts import (
 )
 from douyin_creator_mcp.config import Settings
 from douyin_creator_mcp.browser.commands import LoginStart
-from douyin_creator_mcp.browser.executor import DefaultBrowserBackend
+from douyin_creator_mcp.browser.executor import (
+    BrowserExecutor,
+    DefaultBrowserBackend,
+)
+from douyin_creator_mcp.browser.profile_lock import ProfileLock
 from douyin_creator_mcp.browser.session import BrowserSession
 from douyin_creator_mcp.errors import AppError
 from douyin_creator_mcp.services.browser_service import BrowserService
@@ -235,6 +241,41 @@ class MultiAccountTest(unittest.TestCase):
         self.assertTrue(executor.command.headless)
         self.assertTrue(executor.command.capture_qr)
         self.assertEqual(result["qr_image"], b"qr-png")
+
+    def test_executor_allows_ephemeral_qr_bytes(self) -> None:
+        BrowserExecutor._validate_pure_value(
+            {"account_id": "gaobei", "qr_image": b"qr-png"}
+        )
+
+    def test_profile_lock_reclaims_reused_sandbox_pid(self) -> None:
+        profile_dir = self.settings.douyin_browser_profiles_dir / "gaobei"
+        profile_dir.mkdir(parents=True)
+        lock_path = profile_dir / ".douyin-mcp.lock"
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "owner": "interrupted-turn",
+                    "pid": os.getpid(),
+                    "process_start_ticks": "previous-process",
+                    "acquired_at": "2026-07-23T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        lock = ProfileLock(profile_dir, stale_grace_seconds=3600)
+        with (
+            patch.object(ProfileLock, "_pid_is_alive", return_value=True),
+            patch.object(
+                ProfileLock,
+                "_linux_process_start_ticks",
+                return_value="current-process",
+            ),
+        ):
+            lock.acquire()
+        self.assertTrue(lock._acquired)
+        lock.release()
+        self.assertFalse(lock_path.exists())
 
 
 if __name__ == "__main__":
