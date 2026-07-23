@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import uuid
+from pathlib import Path
 from typing import Any
 
 from fastmcp import Context
@@ -9,7 +12,26 @@ from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image
 from mcp.types import TextContent
 
+from ..accounts import validate_account_id
 from ..responses import response_from_exception, success_response
+
+
+def _write_qr_delivery_file(qr_image: bytes, account_id: str) -> Path:
+    """Persist an ephemeral QR inside the task workdir for chat attachment upload."""
+    account_id = validate_account_id(account_id)
+    output_dir = Path.cwd() / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"douyin-login-qr-{account_id}-{uuid.uuid4().hex}.png"
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(qr_image)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path.resolve()
 
 
 def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
@@ -69,6 +91,10 @@ def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
         try:
             result = resolve(ctx).browser_service.login_qr(account_id=account_id)
             qr_image = result.pop("qr_image", None)
+            if qr_image:
+                result["qr_image_path"] = str(
+                    _write_qr_delivery_file(qr_image, account_id)
+                )
             structured = success_response(**result)
             content: list[Any] = [
                 TextContent(type="text", text=str(result["message"]))
