@@ -139,3 +139,26 @@ CREATE INDEX IF NOT EXISTS idx_metric_snapshots_account_time
   ON video_metric_snapshots(account_id, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_derived_snapshot
   ON video_derived_metrics(snapshot_id);
+
+CREATE TABLE IF NOT EXISTS account_analytics_snapshots (
+  id TEXT PRIMARY KEY,
+  sync_job_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  period_label TEXT,
+  availability TEXT NOT NULL,
+  unavailable_reason TEXT,
+  metrics_json TEXT NOT NULL,
+  sections_json TEXT NOT NULL,
+  missing_reason_json TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(sync_job_id, scope)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_analytics_account_scope_time
+  ON account_analytics_snapshots(account_id, scope, captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_analytics_job
+  ON account_analytics_snapshots(sync_job_id);

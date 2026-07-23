@@ -261,6 +261,10 @@ douyin-mcp videos --limit 20
 douyin-mcp details --recent-limit 20
 douyin-mcp details --recent-limit 20 --cursor 10
 
+# 同步并查询账号总览、作品汇总和粉丝画像
+douyin-mcp account-sync --mode background_first
+douyin-mcp account-data --history
+
 # 查询单条作品表现
 douyin-mcp performance <video_id> --period 30d
 
@@ -280,6 +284,8 @@ douyin-mcp status
 | `status` | 查看登录、缓存、同步任务和覆盖率 |
 | `sync` | 同步作品列表和列表页指标 |
 | `details` | 分批同步指定或近期作品详情 |
+| `account-sync` | 只读同步账号总览、作品汇总和粉丝画像 |
+| `account-data` | 查询账号级指标、平台可用性和历史快照 |
 | `videos` | 分页查询本地作品 |
 | `performance` | 查询单条作品快照和派生指标 |
 | `export` | 导出 JSON 或 CSV |
@@ -289,7 +295,7 @@ douyin-mcp status
 
 ### MCP 工具
 
-默认入口保留原有 13 个浏览器数据工具，并新增 9 个本地视频文案流水线工具。
+默认入口提供 15 个浏览器数据工具和 9 个本地视频文案流水线工具。
 
 <details open>
 <summary><strong>查看 MCP 工具列表</strong></summary>
@@ -303,6 +309,8 @@ douyin-mcp status
 | `douyin_browser_sync_if_needed` | 按 TTL 同步列表、详情或全部数据 |
 | `douyin_browser_sync_creator_data` | 同步作品列表和列表指标 |
 | `douyin_browser_sync_video_details` | 分批同步指定或近期作品详情指标 |
+| `douyin_browser_sync_account_analytics` | 只读同步账号总览、作品汇总和粉丝画像 |
+| `douyin_browser_get_account_analytics` | 查询账号级指标、平台可用性和历史快照 |
 | `douyin_browser_list_videos` | 分页查询作品和最新指标 |
 | `douyin_browser_get_video_performance` | 查询单作品快照和派生指标 |
 | `douyin_browser_compare_videos` | 对比 2～20 条作品 |

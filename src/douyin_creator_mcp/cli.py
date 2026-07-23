@@ -77,6 +77,34 @@ def build_parser() -> argparse.ArgumentParser:
     details.add_argument("--mode", choices=("visible", "background_first"), default="visible")
     details.add_argument("--force", action="store_true")
 
+    account_sync = commands.add_parser(
+        "account-sync",
+        help="只读同步账号总览、作品汇总和粉丝画像。",
+    )
+    account_sync.add_argument(
+        "--scope",
+        action="append",
+        dest="scopes",
+        choices=("overview", "content", "audience"),
+    )
+    account_sync.add_argument(
+        "--mode",
+        choices=("visible", "background_first"),
+        default="background_first",
+    )
+
+    account_data = commands.add_parser(
+        "account-data",
+        help="查询本地账号级指标。",
+    )
+    account_data.add_argument(
+        "--scope",
+        action="append",
+        dest="scopes",
+        choices=("overview", "content", "audience"),
+    )
+    account_data.add_argument("--history", action="store_true")
+
     videos = commands.add_parser("videos", help="查询本地作品列表。")
     videos.add_argument("--limit", type=int, default=20)
     videos.add_argument("--offset", type=int, default=0)
@@ -251,6 +279,20 @@ def run_command(
                 mode=args.mode,
             )
         )
+    if args.command == "account-sync":
+        return success_response(
+            **service.sync_account_analytics(
+                scopes=args.scopes,
+                mode=args.mode,
+            )
+        )
+    if args.command == "account-data":
+        return success_response(
+            **service.get_account_analytics(
+                scopes=args.scopes,
+                include_history=args.history,
+            )
+        )
     if args.command == "videos":
         return success_response(
             **service.list_videos(limit=args.limit, offset=args.offset, sort=args.sort)
@@ -288,6 +330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "login",
         "sync",
         "details",
+        "account-sync",
     }:
         print(f"平台合规提示：{PLATFORM_COMPLIANCE_NOTICE}", file=sys.stderr)
     try:

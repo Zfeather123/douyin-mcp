@@ -227,6 +227,39 @@ _EXTRACT_TEXT_METRICS_SCRIPT = r"""
 }
 """
 
+_EXTRACT_TRAFFIC_SOURCES_SCRIPT = r"""
+() => {
+  const normalized = text => (text || '').replace(/\s+/g, ' ').trim();
+  const result = {};
+  const cards = [...document.querySelectorAll('section,div')]
+    .filter(node => {
+      const text = normalized(node.innerText || node.textContent);
+      return text.startsWith('流量来源') && text.length <= 500 &&
+        node.querySelector('[class*="name-"]');
+    })
+    .sort((a, b) =>
+      normalized(a.innerText || a.textContent).length -
+      normalized(b.innerText || b.textContent).length
+    );
+  if (!cards.length) return result;
+  const card = cards[0];
+  for (const node of card.querySelectorAll('[class*="name-"]')) {
+    const name = normalized(node.innerText || node.textContent);
+    if (!name || name === '流量来源') continue;
+    let container = node.parentElement;
+    let value = null;
+    for (let depth = 0; container && depth < 4 && !value; depth++) {
+      const text = normalized(container.innerText || container.textContent);
+      const match = text.match(/(?:^|\s)(\d+(?:\.\d+)?)%/);
+      if (match) value = `${match[1]}%`;
+      container = container.parentElement;
+    }
+    if (value) result[`流量来源/${name}`] = value;
+  }
+  return result;
+}
+"""
+
 DETAIL_METRIC_FIELDS = (
     "exposure_count",
     "play_count",
@@ -238,6 +271,23 @@ DETAIL_METRIC_FIELDS = (
     "comment_count",
     "share_count",
     "follower_gain",
+)
+
+ACCOUNT_ANALYTICS_LABELS = {
+    "overview": (
+        "播放量", "主页访问", "作品点赞", "作品分享", "作品评论",
+        "封面点击率", "净增粉丝", "取关粉丝", "总粉丝量",
+    ),
+    "content": (
+        "周期内投稿量", "条均点击率", "条均5s完播率", "条均2s跳出率",
+        "条均播放时长", "播放量中位数", "条均点赞数", "条均评论量",
+        "条均分享量",
+    ),
+    "audience": (),
+}
+
+ACCOUNT_AUDIENCE_SECTIONS = (
+    "性别分布", "年龄分布", "地域分布", "地区分布", "活跃时间",
 )
 
 _DETAIL_ALIASES = {
@@ -712,6 +762,13 @@ def _collect_detail_sections(
         raw.update(traffic)
         collected_sections.append("traffic")
     _merge_text_pass("traffic_text")
+    try:
+        traffic_sources = page.evaluate(_EXTRACT_TRAFFIC_SOURCES_SCRIPT)
+    except Exception:
+        traffic_sources = {}
+    if isinstance(traffic_sources, dict) and traffic_sources:
+        raw.update(traffic_sources)
+        collected_sections.append("traffic_sources")
     return raw, collected_sections
 
 
@@ -743,6 +800,121 @@ def extract_page_snapshot(
     if load_stats is not None:
         result["load_stats"] = load_stats
     return result
+
+
+def extract_account_analytics(page: Any, scope: str) -> dict[str, Any]:
+    """Extract only explicitly labelled account aggregates from one analytics page."""
+    if scope not in ACCOUNT_ANALYTICS_LABELS:
+        raise ValueError(f"Unsupported account analytics scope: {scope}")
+    title = _read_page_title(page)
+    url = str(getattr(page, "url", "") or "")
+    body_text = _read_body_text(page)
+    login_status = detect_login_status(body_text, url=url, title=title or "")
+    labels = list(ACCOUNT_ANALYTICS_LABELS[scope])
+    try:
+        metrics = page.evaluate(
+            r"""
+            labels => {
+              const normalized = text => (text || '').replace(/\s+/g, ' ').trim();
+              const valueRe = /^[-+]?(?:\d[\d,.]*)(?:\.\d+)?\s*(?:%|万|亿|秒|条)?$/;
+              const result = {};
+              const nodes = [...document.querySelectorAll('div,span,p')];
+              for (const label of labels) {
+                const matches = [];
+                for (const node of nodes) {
+                  const text = normalized(node.innerText || node.textContent);
+                  if (!text.startsWith(label)) continue;
+                  const value = normalized(text.slice(label.length));
+                  if (!valueRe.test(value)) continue;
+                  matches.push({value, length: text.length});
+                }
+                if (matches.length) {
+                  matches.sort((a, b) => a.length - b.length);
+                  result[label] = matches[0].value;
+                }
+              }
+              return result;
+            }
+            """,
+            labels,
+        )
+    except Exception:
+        metrics = {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    unavailable_reason = None
+    if scope == "audience":
+        match = re.search(
+            r"粉丝数[>＞]\s*\d+可查看粉丝画像[^。\n]*(?:。|$)?",
+            body_text,
+        )
+        if match:
+            unavailable_reason = match.group(0).strip()
+    availability = (
+        "unavailable"
+        if unavailable_reason
+        else ("available" if metrics or scope == "audience" else "partial")
+    )
+
+    sections: dict[str, str] = {}
+    if scope == "audience" and availability != "unavailable":
+        try:
+            sections = page.evaluate(
+                r"""
+                labels => {
+                  const normalized = text => (text || '').replace(/\s+/g, ' ').trim();
+                  const nodes = [...document.querySelectorAll('section,div')];
+                  const result = {};
+                  for (const label of labels) {
+                    const matches = nodes
+                      .map(node => normalized(node.innerText || node.textContent))
+                      .filter(text => text.includes(label) && text.length <= 800)
+                      .sort((a, b) => a.length - b.length);
+                    if (matches.length) result[label] = matches[0];
+                  }
+                  return result;
+                }
+                """,
+                list(ACCOUNT_AUDIENCE_SECTIONS),
+            )
+        except Exception:
+            sections = {}
+        if not isinstance(sections, dict):
+            sections = {}
+        availability = "available" if sections else "partial"
+
+    period_match = re.search(
+        r"(近\s*(?:7|15|30|90)\s*日|最近\s*(?:7|15|30|90)\s*天|"
+        r"20\d{2}[./-]\d{1,2}[./-]\d{1,2}\s*(?:至|-|~)\s*"
+        r"20\d{2}[./-]\d{1,2}[./-]\d{1,2})",
+        body_text,
+    )
+    missing = {
+        label: "not_displayed"
+        for label in labels
+        if label not in metrics
+    }
+    if scope == "audience":
+        for label in ACCOUNT_AUDIENCE_SECTIONS:
+            if label not in sections:
+                missing[label] = (
+                    "platform_threshold_not_met"
+                    if unavailable_reason
+                    else "not_displayed"
+                )
+    return {
+        "scope": scope,
+        "title": title,
+        "source_url": url,
+        "login_status": login_status,
+        "period_label": period_match.group(0).replace(" ", "") if period_match else None,
+        "availability": availability,
+        "unavailable_reason": unavailable_reason,
+        "metrics": {str(key): str(value) for key, value in metrics.items()},
+        "sections": {str(key): str(value) for key, value in sections.items()},
+        "missing_reasons": missing,
+    }
 
 
 def _read_page_title(page: Any) -> str | None:

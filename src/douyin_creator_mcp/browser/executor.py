@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from ..accounts import browser_profile_dir, validate_account_id
 from ..browser.extractors import (
     collect_all_video_cards,
+    extract_account_analytics,
     extract_detail_metrics,
     extract_page_snapshot,
 )
@@ -38,6 +39,7 @@ from .commands import (
     ObserveMediaBundle,
     Shutdown,
     SyncCreatorList,
+    SyncAccountAnalytics,
     SyncVideoDetails,
     VerifyAccount,
 )
@@ -186,6 +188,25 @@ class DefaultBrowserBackend:
                     }
                 )
             return {"details": details}
+        if isinstance(command, SyncAccountAnalytics):
+            session = self._ensure_session(headless=command.headless)
+            videos, load_stats = collect_all_video_cards(
+                session.open_creator_video_page()
+            )
+            declared = load_stats.get("page_total_video_count")
+            loaded = int(load_stats.get("loaded_card_count") or 0)
+            if declared is not None and loaded != int(declared):
+                raise AppError(
+                    VALIDATION_ERROR,
+                    "Creator inventory is incomplete; account analytics were not collected.",
+                    retryable=True,
+                )
+            self._verify_account_binding(command.account_id, videos)
+            snapshots = []
+            for scope in command.scopes:
+                page = session.open_account_analytics(scope)
+                snapshots.append(extract_account_analytics(page, scope))
+            return {"snapshots": snapshots}
         if isinstance(command, VerifyAccount):
             session = self._ensure_session(command.account_id)
             page = session.open_creator_video_page()

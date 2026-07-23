@@ -143,6 +143,22 @@ class BrowserSession:
     def open_creator_video_page(self) -> Any:
         return self.open_page(self.settings.douyin_creator_video_url)
 
+    def open_account_analytics(self, scope: str) -> Any:
+        urls = {
+            "overview": "https://creator.douyin.com/creator-micro/data-center/operation",
+            "content": "https://creator.douyin.com/creator-micro/data-center/content",
+            "audience": "https://creator.douyin.com/creator-micro/data/stats/follower/portrait",
+        }
+        try:
+            url = urls[scope]
+        except KeyError as exc:
+            raise AppError(
+                CONFIGURATION_ERROR,
+                f"Unsupported account analytics scope: {scope}",
+                retryable=False,
+            ) from exc
+        return self.open_page(url)
+
     def open_video_detail(self, url: str) -> Any:
         return self.open_page(url)
 

@@ -171,6 +171,34 @@ def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
         )
 
     @mcp.tool()
+    def douyin_browser_sync_account_analytics(
+        ctx: Context,
+        scopes: list[str] | None = None,
+        mode: str = "background_first",
+    ) -> dict[str, Any]:
+        """只读同步账号总览、作品汇总和粉丝画像；不读取私信内容。"""
+        return call(
+            ctx,
+            "sync_account_analytics",
+            scopes=scopes,
+            mode=mode,
+        )
+
+    @mcp.tool()
+    def douyin_browser_get_account_analytics(
+        ctx: Context,
+        scopes: list[str] | None = None,
+        include_history: bool = False,
+    ) -> dict[str, Any]:
+        """读取本地账号级指标及可用性；可选返回历史快照。"""
+        return call(
+            ctx,
+            "get_account_analytics",
+            scopes=scopes,
+            include_history=include_history,
+        )
+
+    @mcp.tool()
     def douyin_browser_list_videos(
         ctx: Context,
         limit: int = 20,
