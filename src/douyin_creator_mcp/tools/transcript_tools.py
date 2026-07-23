@@ -14,7 +14,6 @@ from ..errors import (
     AppError,
 )
 from ..responses import response_from_exception, success_response
-from ..services.browser_service import BROWSER_DEFAULT_ACCOUNT_ID
 
 
 def _decode_run_cursor(
@@ -63,10 +62,12 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         recent_limit: int = 20,
         force: bool = False,
         all_public: bool = False,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """提交指定/近期文案任务；all_public 仅用于用户显式全量回溯。"""
 
         def submit(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
             if not container.settings.transcript_ingestion_enabled:
                 raise AppError(
                     TRANSCRIPT_DISABLED,
@@ -85,7 +86,7 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                     "SELECT id FROM videos WHERE account_id=? AND is_active=1 "
                     "AND visibility='public' AND content_kind='video' "
                     "ORDER BY publish_time DESC,id",
-                    (BROWSER_DEFAULT_ACCOUNT_ID,),
+                    (selected,),
                     read_only=True,
                 )
                 if len(rows) > 100:
@@ -104,13 +105,13 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                     "SELECT id FROM videos WHERE account_id=? AND is_active=1 "
                     "AND visibility='public' AND content_kind='video' "
                     "ORDER BY publish_time DESC,id LIMIT ?",
-                    (BROWSER_DEFAULT_ACCOUNT_ID, recent_limit),
+                    (selected, recent_limit),
                     read_only=True,
                 )
                 ids = [str(row["id"]) for row in rows]
                 mode = "recent"
             result = container.transcript_repository.create_run(
-                BROWSER_DEFAULT_ACCOUNT_ID,
+                selected,
                 ids,
                 force=force,
                 trigger=trigger,
@@ -127,15 +128,17 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         run_id: str,
         item_limit: int = 50,
         cursor: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """读取某次提交的本地状态、逐视频阶段和逐 run 计数。"""
         def get(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
             payload = _decode_run_cursor(
                 container.transcript_query.signer,
                 cursor,
                 kind="run_items",
                 expected_id=run_id,
-                expected_account_id=BROWSER_DEFAULT_ACCOUNT_ID,
+                expected_account_id=selected,
             )
             after = None
             if payload:
@@ -150,7 +153,7 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
             result = container.transcript_repository.get_run(
                 run_id, item_limit=item_limit, after=after
             )
-            if result["account_id"] != BROWSER_DEFAULT_ACCOUNT_ID:
+            if result["account_id"] != selected:
                 raise AppError(VALIDATION_ERROR, "Run does not belong to this account.")
             marker = result.pop("_next_item", None)
             if marker:
@@ -158,7 +161,7 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                     {
                         "v": 1,
                         "kind": "run_items",
-                        "account_id": BROWSER_DEFAULT_ACCOUNT_ID,
+                        "account_id": selected,
                         "run_id": run_id,
                         **marker,
                     }
@@ -172,14 +175,16 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         ctx: Context,
         limit: int = 20,
         cursor: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """分页列出本地文案任务。"""
         def list_page(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
             payload = _decode_run_cursor(
                 container.transcript_query.signer,
                 cursor,
                 kind="run_list",
-                expected_id=BROWSER_DEFAULT_ACCOUNT_ID,
+                expected_id=selected,
             )
             before = None
             if payload:
@@ -188,7 +193,7 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                 except KeyError as exc:
                     raise AppError(INVALID_CURSOR, "Run list cursor is incomplete.") from exc
             result = container.transcript_repository.list_runs_page(
-                BROWSER_DEFAULT_ACCOUNT_ID, limit, before
+                selected, limit, before
             )
             marker = result.pop("_next_run", None)
             result["next_cursor"] = (
@@ -196,7 +201,7 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                     {
                         "v": 1,
                         "kind": "run_list",
-                        "account_id": BROWSER_DEFAULT_ACCOUNT_ID,
+                        "account_id": selected,
                         **marker,
                     }
                 )
@@ -208,15 +213,33 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         return call(ctx, list_page)
 
     @mcp.tool()
-    def douyin_browser_cancel_transcript_run(ctx: Context, run_id: str) -> dict[str, Any]:
+    def douyin_browser_cancel_transcript_run(
+        ctx: Context,
+        run_id: str,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
         """取消这一 run 的需求，不影响其他 run 仍需要的共享工作。"""
-        return call(ctx, lambda container: container.transcript_repository.cancel_run(run_id))
+        def cancel(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
+            run = container.transcript_repository.get_run(run_id)
+            if run["account_id"] != selected:
+                raise AppError(VALIDATION_ERROR, "Run does not belong to this account.")
+            return container.transcript_repository.cancel_run(run_id)
+        return call(ctx, cancel)
 
     @mcp.tool()
-    def douyin_browser_retry_transcript_run(ctx: Context, run_id: str) -> dict[str, Any]:
+    def douyin_browser_retry_transcript_run(
+        ctx: Context,
+        run_id: str,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
         """为失败视频创建新的 retry run，旧 run 保持不可变。"""
 
         def retry(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
+            run = container.transcript_repository.get_run(run_id)
+            if run["account_id"] != selected:
+                raise AppError(VALIDATION_ERROR, "Run does not belong to this account.")
             result = container.transcript_repository.retry_run(run_id)
             container.transcript_coordinator.wake()
             return result
@@ -251,11 +274,14 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
     @mcp.tool()
     def douyin_browser_get_transcript_backfill_plan(
         ctx: Context,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """预估全量历史回溯的数量、耗时和存储；不会创建文案任务。"""
         return call(
             ctx,
-            lambda container: container.transcript_policy.backfill_plan(),
+            lambda container: container.transcript_policy.backfill_plan(
+                account_id=container.browser_service._resolve_account_id(account_id)
+            ),
         )
 
     @mcp.tool()
@@ -266,18 +292,29 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         limit: int = 100,
         cursor: str | None = None,
         include_raw_text: bool = False,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """分页返回不可变 revision 的原始时间戳分片。"""
-        return call(
-            ctx,
-            lambda container: container.transcript_query.get_video_transcript(
+        def get(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
+            video = container.db.query_one(
+                "SELECT id FROM videos WHERE id=? AND account_id=?",
+                (video_id, selected),
+                read_only=True,
+            )
+            if video is None:
+                raise AppError(
+                    DATA_NOT_AVAILABLE,
+                    "Video is missing or belongs to another account.",
+                )
+            return container.transcript_query.get_video_transcript(
                 video_id,
                 revision=revision,
                 limit=limit,
                 cursor=cursor,
                 include_raw_text=include_raw_text,
-            ),
-        )
+            )
+        return call(ctx, get)
 
     @mcp.tool()
     def douyin_browser_get_video_analysis_context(
@@ -288,9 +325,21 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
         cursor: str | None = None,
         max_chars: int = 12000,
         auto_prepare: bool = True,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         """返回分析段落；缺失时默认排队补齐且不改写原始 ASR 文本。"""
         def get_or_prepare(container: Any) -> dict[str, Any]:
+            selected = container.browser_service._resolve_account_id(account_id)
+            video = container.db.query_one(
+                "SELECT id FROM videos WHERE id=? AND account_id=?",
+                (video_id, selected),
+                read_only=True,
+            )
+            if video is None:
+                raise AppError(
+                    DATA_NOT_AVAILABLE,
+                    "Video is missing or belongs to another account.",
+                )
             try:
                 return container.transcript_query.get_video_analysis_context(
                     video_id,
@@ -309,6 +358,8 @@ def register_transcript_tools(mcp: Any, services: Any | None = None) -> None:
                 )
                 if not should_prepare:
                     raise
-                return container.transcript_policy.prepare_analysis([video_id])
+                return container.transcript_policy.prepare_analysis(
+                    [video_id], account_id=selected
+                )
 
         return call(ctx, get_or_prepare)

@@ -19,6 +19,7 @@ class Settings:
     data_dir: Path = Path("./data")
     log_level: str = "INFO"
     douyin_browser_profile_dir: Path = Path("./data/browser-profile")
+    douyin_browser_profiles_dir: Path = Path("./data/browser-profiles")
     douyin_browser_headless: bool = False
     douyin_browser_auto_close: bool = True
     douyin_browser_channel: str | None = "chrome"
@@ -110,6 +111,9 @@ def load_settings(
         log_level=_get(merged, "LOG_LEVEL", "INFO"),
         douyin_browser_profile_dir=Path(
             _get(merged, "DOUYIN_BROWSER_PROFILE_DIR", "./data/browser-profile")
+        ),
+        douyin_browser_profiles_dir=Path(
+            _get(merged, "DOUYIN_BROWSER_PROFILES_DIR", "./data/browser-profiles")
         ),
         douyin_browser_headless=_get_bool(merged, "DOUYIN_BROWSER_HEADLESS", False),
         douyin_browser_auto_close=_get_bool(merged, "DOUYIN_BROWSER_AUTO_CLOSE", True),
@@ -301,6 +305,7 @@ def ensure_runtime_dirs(settings: Settings) -> None:
     (settings.data_dir / "media").mkdir(parents=True, exist_ok=True)
     (settings.data_dir / "staging").mkdir(parents=True, exist_ok=True)
     settings.douyin_browser_profile_dir.mkdir(parents=True, exist_ok=True)
+    settings.douyin_browser_profiles_dir.mkdir(parents=True, exist_ok=True)
 
 
 def validate_for_http(settings: Settings) -> None:

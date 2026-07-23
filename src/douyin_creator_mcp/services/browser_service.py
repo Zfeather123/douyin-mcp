@@ -1,4 +1,4 @@
-"""Single-account browser data channel and trustworthy local analytics."""
+"""Multi-account browser data channel and trustworthy local analytics."""
 
 from __future__ import annotations
 
@@ -17,6 +17,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
+from ..accounts import (
+    BROWSER_DEFAULT_ACCOUNT_ID,
+    browser_profile_dir,
+    validate_account_id,
+)
 from ..browser.extractors import (
     DETAIL_METRIC_FIELDS,
     LOGGED_IN,
@@ -39,6 +44,7 @@ from ..config import Settings
 from ..errors import (
     ACCOUNT_IDENTITY_UNRESOLVED,
     ACCOUNT_MISMATCH,
+    CONFIGURATION_ERROR,
     DATA_NOT_AVAILABLE,
     VALIDATION_ERROR,
     VIDEO_IDENTITY_UNRESOLVED,
@@ -48,7 +54,6 @@ from ..storage.db import Database
 from .metrics import FORMULA_VERSION, compute_derived_metrics, percentile_rank
 
 
-BROWSER_DEFAULT_ACCOUNT_ID = "browser-default"
 LIST_SOURCE = "browser_list"
 DETAIL_SOURCE = "browser_detail"
 
@@ -74,10 +79,14 @@ class BrowserService:
 
     # Login and status -------------------------------------------------
 
-    def login_start(self) -> dict[str, Any]:
+    def login_start(self, account_id: str | None = None) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
         require_platform_risk_acknowledgement(self.settings.data_dir)
         if self._browser_executor is not None:
-            result = self._browser_executor.execute(LoginStart(headless=False))
+            result = self._browser_executor.execute(
+                LoginStart(account_id=account_id, headless=False)
+            )
             return {
                 **result,
                 "message": "浏览器已打开。如页面要求登录或验证，请完成扫码后继续。",
@@ -98,9 +107,11 @@ class BrowserService:
             self.close_browser()
             raise
 
-    def login_status(self) -> dict[str, Any]:
+    def login_status(self, account_id: str | None = None) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
         if self._browser_executor is not None:
-            result = self._browser_executor.execute(LoginStatus())
+            result = self._browser_executor.execute(LoginStatus(account_id=account_id))
             result.setdefault(
                 "message",
                 "浏览器会话尚未启动。需要登录时调用登录工具。"
@@ -130,29 +141,41 @@ class BrowserService:
             "video_candidate_count": len(snapshot["video_candidates"]),
         }
 
-    def get_status(self) -> dict[str, Any]:
+    def get_status(self, account_id: str | None = None) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         latest_job = self.db.query_one(
-            "SELECT * FROM sync_jobs ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM sync_jobs WHERE account_id=? ORDER BY started_at DESC LIMIT 1",
+            (account_id,),
         )
         active_job = self.db.query_one(
-            "SELECT * FROM sync_jobs WHERE status = 'running' "
-            "ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM sync_jobs WHERE account_id=? AND status = 'running' "
+            "ORDER BY started_at DESC LIMIT 1",
+            (account_id,),
         )
-        list_snapshot = self._latest_metric_snapshot(source=LIST_SOURCE)
-        detail_snapshot = self._latest_metric_snapshot(source=DETAIL_SOURCE)
+        list_snapshot = self._latest_metric_snapshot(
+            source=LIST_SOURCE, account_id=account_id
+        )
+        detail_snapshot = self._latest_metric_snapshot(
+            source=DETAIL_SOURCE, account_id=account_id
+        )
         browser_snapshot = self.db.query_one(
-            "SELECT status, created_at FROM browser_snapshots ORDER BY created_at DESC LIMIT 1"
+            "SELECT status, created_at FROM browser_snapshots WHERE account_id=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (account_id,),
         )
-        coverage = self.get_metric_coverage()
+        coverage = self.get_metric_coverage(account_id=account_id)
         account_binding = self._public_account_binding(
             self.db.query_one(
                 "SELECT account_id, anchor_count, created_at, last_verified_at "
                 "FROM browser_account_bindings WHERE account_id = ?",
-                (BROWSER_DEFAULT_ACCOUNT_ID,),
+                (account_id,),
             )
         )
+        profile_dir = self._profile_dir(account_id)
         return {
             "status": "completed",
+            "account_id": account_id,
+            "available_accounts": self._known_account_ids(),
             "platform_compliance": platform_compliance_status(
                 self.settings.data_dir
             ),
@@ -168,7 +191,12 @@ class BrowserService:
             ),
             "latest_sync": self._safe_job(latest_job),
             "active_sync": self._safe_job(active_job),
-            "profile_lock": self._public_profile_lock(self._profile_lock().inspect()),
+            "profile_lock": self._public_profile_lock(
+                ProfileLock(
+                    profile_dir,
+                    self.settings.douyin_profile_lock_filename,
+                ).inspect()
+            ),
             "account_binding": account_binding,
             "coverage": coverage["coverage"],
             "warnings": coverage["warnings"],
@@ -176,11 +204,14 @@ class BrowserService:
 
     def sync_if_needed(
         self,
+        account_id: str | None = None,
         scope: str = "list",
         max_age_hours: int | None = None,
         mode: str = "background_first",
         recent_limit: int = 20,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
         if scope not in {"list", "details", "all"}:
             raise AppError(VALIDATION_ERROR, "scope must be list, details, or all.")
         self._validate_mode(mode)
@@ -197,29 +228,37 @@ class BrowserService:
         warnings: list[str] = []
         if scope in {"list", "all"}:
             ttl = self.settings.douyin_list_cache_ttl_hours if max_age_hours is None else max_age_hours
-            latest = self._latest_metric_snapshot(source=LIST_SOURCE)
+            latest = self._latest_metric_snapshot(
+                source=LIST_SOURCE, account_id=account_id
+            )
             freshness = self._freshness(latest.get("captured_at") if latest else None, ttl)
             if not freshness["is_stale"]:
                 results["list"] = {"status": "cache_hit", "freshness": freshness}
             else:
-                results["list"] = self.sync_creator_data(mode=mode)
+                results["list"] = self.sync_creator_data(
+                    account_id=account_id, mode=mode
+                )
         if scope in {"details", "all"}:
             ttl = self.settings.douyin_detail_cache_ttl_hours if max_age_hours is None else max_age_hours
             selected = self._select_detail_videos(
-                BROWSER_DEFAULT_ACCOUNT_ID, None, recent_limit
+                account_id, None, recent_limit
             )
             stale_ids = [
                 video["id"]
                 for video in selected
                 if self._freshness(
-                    (self._latest_metric_snapshot(video["id"], DETAIL_SOURCE) or {}).get(
+                    (self._latest_metric_snapshot(
+                        video["id"], DETAIL_SOURCE, account_id
+                    ) or {}).get(
                         "captured_at"
                     ),
                     ttl,
                 )["is_stale"]
             ]
             if selected and not stale_ids:
-                latest = self._latest_metric_snapshot(source=DETAIL_SOURCE)
+                latest = self._latest_metric_snapshot(
+                    source=DETAIL_SOURCE, account_id=account_id
+                )
                 results["details"] = {
                     "status": "cache_hit",
                     "freshness": self._freshness(latest.get("captured_at"), ttl),
@@ -232,6 +271,7 @@ class BrowserService:
                     force=max_age_hours is not None,
                     batch_size=self.settings.douyin_detail_batch_size,
                     mode=mode,
+                    account_id=account_id,
                 )
         if mode == "background_first":
             warnings.append("后台模式失败或触发验证时，将要求用户在可见浏览器中重新扫码。")
@@ -241,6 +281,7 @@ class BrowserService:
         )
         return {
             "status": status,
+            "account_id": account_id,
             "scope": scope,
             "results": results,
             "warnings": warnings,
@@ -251,10 +292,12 @@ class BrowserService:
 
     def sync_creator_data(
         self,
-        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+        account_id: str | None = None,
         mode: str = "visible",
         force: bool = False,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
         require_platform_risk_acknowledgement(self.settings.data_dir)
         self._validate_mode(mode)
         del force  # A full list sync is already idempotent at the video identity layer.
@@ -268,7 +311,10 @@ class BrowserService:
             with access:
                 if self._browser_executor is not None:
                     browser_result = self._browser_executor.execute(
-                        SyncCreatorList(headless=mode == "background_first")
+                        SyncCreatorList(
+                            account_id=account_id,
+                            headless=mode == "background_first",
+                        )
                     )
                     snapshot = browser_result["snapshot"]
                     structured_videos = browser_result["videos"]
@@ -282,11 +328,11 @@ class BrowserService:
                     LOGIN_REQUIRED,
                     VERIFICATION_REQUIRED,
                 }:
-                    self.close_browser()
-                    self.login_start()
+                    self.close_browser(account_id)
+                    self.login_start(account_id)
                     if self._browser_executor is not None:
                         browser_result = self._browser_executor.execute(
-                            SyncCreatorList(headless=False)
+                            SyncCreatorList(account_id=account_id, headless=False)
                         )
                         snapshot = browser_result["snapshot"]
                         structured_videos = browser_result["videos"]
@@ -381,7 +427,7 @@ class BrowserService:
                 VERIFICATION_REQUIRED,
             }
             if self.settings.douyin_browser_auto_close and not keep_open:
-                self.close_browser()
+                self.close_browser(account_id)
 
     # Detail synchronization ------------------------------------------
 
@@ -393,8 +439,10 @@ class BrowserService:
         batch_size: int | None = None,
         cursor: int = 0,
         mode: str = "visible",
-        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
         require_platform_risk_acknowledgement(self.settings.data_dir)
         self._validate_mode(mode)
         if video_ids is not None and not 1 <= len(video_ids) <= 50:
@@ -434,10 +482,10 @@ class BrowserService:
                     else None
                 )
                 for index, video in enumerate(batch, start=cursor):
-                    if not force and self._has_fresh_detail(video["id"]):
+                    if not force and self._has_fresh_detail(video["id"], account_id):
                         cached += 1
                         cached_snapshot = self._latest_metric_snapshot(
-                            video["id"], DETAIL_SOURCE
+                            video["id"], DETAIL_SOURCE, account_id
                         ) or {}
                         cached_at = cached_snapshot.get("captured_at")
                         if cached_at and (captured_at is None or str(cached_at) > captured_at):
@@ -451,6 +499,7 @@ class BrowserService:
                         if self._browser_executor is not None:
                             browser_result = self._browser_executor.execute(
                                 SyncVideoDetails(
+                                    account_id=account_id,
                                     videos=(dict(video),),
                                     headless=mode == "background_first",
                                 )
@@ -498,8 +547,8 @@ class BrowserService:
                     login_status = detail["login_status"]
                     if login_status in {LOGIN_REQUIRED, VERIFICATION_REQUIRED}:
                         if mode == "background_first":
-                            self.close_browser()
-                            visible_login = self.login_start()
+                            self.close_browser(account_id)
+                            visible_login = self.login_start(account_id)
                             login_status = str(visible_login["login_status"])
                         return_status = (
                             "user_action_required"
@@ -602,18 +651,19 @@ class BrowserService:
                 LOGIN_REQUIRED,
                 VERIFICATION_REQUIRED,
             }:
-                self.close_browser()
+                self.close_browser(account_id)
 
     # Query and analysis ----------------------------------------------
 
     def list_videos(
         self,
-        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+        account_id: str | None = None,
         limit: int = 20,
         offset: int = 0,
         filters: dict[str, Any] | None = None,
         sort: str = "publish_time_desc",
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise AppError(VALIDATION_ERROR, "limit must be an integer between 1 and 100.")
         if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
@@ -676,8 +726,9 @@ class BrowserService:
         self,
         video_id: str,
         period: str = "30d",
-        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         video = self.db.query_one(
             "SELECT * FROM videos WHERE id = ? AND account_id = ?",
             (video_id, account_id),
@@ -727,7 +778,9 @@ class BrowserService:
         video_ids: list[str],
         metrics: list[str] | None = None,
         period: str = "30d",
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         if len(set(video_ids)) != len(video_ids) or not 2 <= len(video_ids) <= 20:
             raise AppError(VALIDATION_ERROR, "Compare between 2 and 20 unique videos.")
         requested = metrics or [
@@ -751,7 +804,7 @@ class BrowserService:
                 False,
                 {"unsupported_metrics": unsupported},
             )
-        videos = self._videos_by_ids(video_ids)
+        videos = self._videos_by_ids(video_ids, account_id)
         snapshots = self._latest_performance_map(video_ids, period)
         rows = []
         warnings: list[str] = []
@@ -780,8 +833,9 @@ class BrowserService:
         self,
         period: str = "all",
         video_ids: list[str] | None = None,
-        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         params: list[Any] = [account_id]
         where = "account_id = ? AND source = 'browser_dom'"
         if video_ids:
@@ -868,10 +922,12 @@ class BrowserService:
         period: str = "30d",
         limit: int = 10,
         weights: dict[str, float] | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         if not 1 <= limit <= 100:
             raise AppError(VALIDATION_ERROR, "limit must be between 1 and 100.")
-        listed = self.list_videos(limit=100, offset=0)
+        listed = self.list_videos(account_id=account_id, limit=100, offset=0)
         snapshots = self._latest_performance_map(
             [video["id"] for video in listed["videos"]], period
         )
@@ -952,12 +1008,18 @@ class BrowserService:
         period: str = "30d",
         focus: str = "potential",
         recent_limit: int = 20,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         if focus != "potential":
             raise AppError(VALIDATION_ERROR, "V1 focus currently supports only potential.")
-        coverage = self.get_metric_coverage(period=period)
-        ranking = self.rank_video_potential(period=period, limit=min(recent_limit, 20))
-        listed = self.list_videos(limit=min(recent_limit, 100), offset=0)
+        coverage = self.get_metric_coverage(period=period, account_id=account_id)
+        ranking = self.rank_video_potential(
+            period=period, limit=min(recent_limit, 20), account_id=account_id
+        )
+        listed = self.list_videos(
+            account_id=account_id, limit=min(recent_limit, 100), offset=0
+        )
         warnings = sorted(set([*coverage["warnings"], *ranking["warnings"]]))
         findings = []
         for item in ranking["videos"][:5]:
@@ -991,7 +1053,9 @@ class BrowserService:
         format: str = "json",
         period: str = "all",
         output_path: str | Path | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         normalized = format.lower()
         if normalized not in {"json", "csv"}:
             raise AppError(VALIDATION_ERROR, "format must be json or csv.")
@@ -1011,11 +1075,11 @@ class BrowserService:
               {self._period_sql(period, 's.captured_at')}
             ORDER BY v.publish_time DESC, s.captured_at DESC
             """,
-            tuple([BROWSER_DEFAULT_ACCOUNT_ID, *self._period_params(period)]),
+            tuple([account_id, *self._period_params(period)]),
         )
         exports_dir = self.settings.data_dir / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
-        target = Path(output_path) if output_path else exports_dir / f"douyin-{period}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{normalized}"
+        target = Path(output_path) if output_path else exports_dir / f"douyin-{account_id}-{period}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{normalized}"
         target.parent.mkdir(parents=True, exist_ok=True)
         if normalized == "json":
             target.write_text(json.dumps({"period": period, "rows": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1025,7 +1089,14 @@ class BrowserService:
                 writer = csv.DictWriter(handle, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-        return {"status": "completed", "format": normalized, "period": period, "path": str(target), "row_count": len(rows)}
+        return {
+            "status": "completed",
+            "account_id": account_id,
+            "format": normalized,
+            "period": period,
+            "path": str(target),
+            "row_count": len(rows),
+        }
 
     def purge_local_data(self) -> dict[str, Any]:
         """Delete the local cache and dedicated profile after the CLI confirms intent."""
@@ -1105,9 +1176,9 @@ class BrowserService:
         )
         return {"report_id": report_id, "report_path": str(report_path), "summary": summary}
 
-    def close_browser(self) -> None:
+    def close_browser(self, account_id: str | None = None) -> None:
         if self._browser_executor is not None:
-            self._browser_executor.close_session()
+            self._browser_executor.close_session(account_id)
             return
         session = self._session
         self._session = None
@@ -1120,7 +1191,8 @@ class BrowserService:
             if lock is not None:
                 lock.release()
 
-    def latest_snapshot_summary(self, account_id: str = BROWSER_DEFAULT_ACCOUNT_ID) -> dict[str, Any]:
+    def latest_snapshot_summary(self, account_id: str | None = None) -> dict[str, Any]:
+        account_id = self._resolve_account_id(account_id)
         snapshot = self._latest_snapshot(account_id)
         extracted = snapshot["extracted"]
         source_url = urlsplit(snapshot["source_url"])
@@ -1140,6 +1212,52 @@ class BrowserService:
         }
 
     # Persistence helpers --------------------------------------------
+
+    def _known_account_ids(self) -> list[str]:
+        rows = self.db.query_all(
+            """
+            SELECT account_id FROM browser_account_bindings
+            UNION SELECT account_id FROM browser_snapshots
+            UNION SELECT account_id FROM sync_jobs
+            UNION SELECT account_id FROM videos
+            ORDER BY account_id
+            """,
+            read_only=True,
+        )
+        return [
+            validate_account_id(str(row["account_id"]))
+            for row in rows
+            if row.get("account_id")
+        ]
+
+    def _resolve_account_id(self, account_id: str | None) -> str:
+        if account_id is not None:
+            return validate_account_id(account_id)
+        known = self._known_account_ids()
+        if len(known) > 1:
+            raise AppError(
+                VALIDATION_ERROR,
+                "Multiple creator accounts are configured; account_id is required.",
+                extra={"available_accounts": known},
+            )
+        return known[0] if known else BROWSER_DEFAULT_ACCOUNT_ID
+
+    def _profile_dir(self, account_id: str) -> Path:
+        return browser_profile_dir(
+            self.settings.douyin_browser_profile_dir,
+            self.settings.douyin_browser_profiles_dir,
+            account_id,
+        )
+
+    def _require_account_executor(self, account_id: str) -> None:
+        if (
+            account_id != BROWSER_DEFAULT_ACCOUNT_ID
+            and self._browser_executor is None
+        ):
+            raise AppError(
+                CONFIGURATION_ERROR,
+                "Named creator accounts require the account-aware browser executor.",
+            )
 
     def _get_session(self, headless: bool | None = None) -> BrowserSession:
         if self._session is None:
@@ -1659,10 +1777,13 @@ class BrowserService:
         return row
 
     def _latest_metric_snapshot(
-        self, video_id: str | None = None, source: str | None = None
+        self,
+        video_id: str | None = None,
+        source: str | None = None,
+        account_id: str = BROWSER_DEFAULT_ACCOUNT_ID,
     ) -> dict[str, Any] | None:
         where = ["account_id = ?"]
-        params: list[Any] = [BROWSER_DEFAULT_ACCOUNT_ID]
+        params: list[Any] = [validate_account_id(account_id)]
         if video_id:
             where.append("video_id = ?")
             params.append(video_id)
@@ -1675,8 +1796,12 @@ class BrowserService:
             tuple(params),
         )
 
-    def _has_fresh_detail(self, video_id: str) -> bool:
-        latest = self._latest_metric_snapshot(video_id=video_id, source=DETAIL_SOURCE)
+    def _has_fresh_detail(self, video_id: str, account_id: str) -> bool:
+        latest = self._latest_metric_snapshot(
+            video_id=video_id,
+            source=DETAIL_SOURCE,
+            account_id=account_id,
+        )
         if not latest or latest.get("parser_version") != self.settings.douyin_detail_parser_version:
             return False
         return not self._freshness(

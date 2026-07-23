@@ -30,8 +30,18 @@ def _load_sync_playwright() -> Any:
 class BrowserSession:
     """Manage a persistent local browser profile without exposing cookies."""
 
-    def __init__(self, settings: Settings, headless: bool | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        headless: bool | None = None,
+        profile_dir: Any | None = None,
+    ) -> None:
         self.settings = settings
+        self.profile_dir = (
+            settings.douyin_browser_profile_dir
+            if profile_dir is None
+            else profile_dir
+        )
         self._headless = settings.douyin_browser_headless if headless is None else headless
         self._playwright_manager: Any | None = None
         self._playwright: Any | None = None
@@ -55,14 +65,14 @@ class BrowserSession:
         if self._context is not None:
             return self._context
 
-        self.settings.douyin_browser_profile_dir.mkdir(parents=True, exist_ok=True)
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
 
         manager_factory = _load_sync_playwright()
         self._playwright_manager = manager_factory()
         self._playwright = self._playwright_manager.start()
 
         launch_options: dict[str, Any] = {
-            "user_data_dir": str(self.settings.douyin_browser_profile_dir),
+            "user_data_dir": str(self.profile_dir),
             "headless": self._headless,
         }
         if self.settings.douyin_browser_channel:

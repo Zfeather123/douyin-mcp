@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
+from ..accounts import browser_profile_dir, validate_account_id
 from ..browser.extractors import (
     collect_all_video_cards,
     extract_detail_metrics,
@@ -63,27 +64,58 @@ class DefaultBrowserBackend:
     def __init__(self, settings: Settings, database: Database | None = None):
         self.settings = settings
         self.database = database
-        self.session: BrowserSession | None = None
-        self.profile_lock: ProfileLock | None = None
+        self.sessions: dict[str, BrowserSession] = {}
+        self.profile_locks: dict[str, ProfileLock] = {}
         self.thread_id = threading.get_ident()
-        self._verified_targets: dict[str, dict[str, Any]] = {}
+        self._verified_targets: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def _ensure_session(self, headless: bool | None = None) -> BrowserSession:
-        if self.session is None:
-            lock = ProfileLock(
+    @property
+    def session(self) -> BrowserSession | None:
+        """Compatibility view for older single-account embedders."""
+        return self.sessions.get("browser-default") or next(
+            iter(self.sessions.values()), None
+        )
+
+    @property
+    def profile_lock(self) -> ProfileLock | None:
+        """Compatibility view for older single-account embedders."""
+        return self.profile_locks.get("browser-default") or next(
+            iter(self.profile_locks.values()), None
+        )
+
+    def _ensure_session(
+        self,
+        account_id: str,
+        headless: bool | None = None,
+    ) -> BrowserSession:
+        account_id = validate_account_id(account_id)
+        session = self.sessions.get(account_id)
+        if session is None:
+            profile_dir = browser_profile_dir(
                 self.settings.douyin_browser_profile_dir,
+                self.settings.douyin_browser_profiles_dir,
+                account_id,
+            )
+            lock = ProfileLock(
+                profile_dir,
                 self.settings.douyin_profile_lock_filename,
             )
             lock.acquire()
-            self.profile_lock = lock
-            self.session = BrowserSession(self.settings, headless=headless)
-        return self.session
+            self.profile_locks[account_id] = lock
+            session = BrowserSession(
+                self.settings,
+                headless=headless,
+                profile_dir=profile_dir,
+            )
+            self.sessions[account_id] = session
+        return session
 
     def handle(self, command: BrowserCommand) -> Any:
         if isinstance(command, LoginStart):
-            session = self._ensure_session(headless=command.headless)
+            session = self._ensure_session(command.account_id, headless=command.headless)
             snapshot = extract_page_snapshot(session.open_creator_home())
             return {
+                "account_id": command.account_id,
                 "browser_running": session.is_running,
                 "login_status": snapshot["login_status"],
                 "title": snapshot["title"],
@@ -91,13 +123,23 @@ class DefaultBrowserBackend:
                 "video_candidate_count": len(snapshot["video_candidates"]),
             }
         if isinstance(command, LoginStatus):
-            if self.session is None or not self.session.is_running:
-                return {"browser_running": False, "login_status": "not_started"}
-            pages = list(getattr(self.session.context, "pages", None) or [])
+            session = self.sessions.get(validate_account_id(command.account_id))
+            if session is None or not session.is_running:
+                return {
+                    "account_id": command.account_id,
+                    "browser_running": False,
+                    "login_status": "not_started",
+                }
+            pages = list(getattr(session.context, "pages", None) or [])
             if not pages:
-                return {"browser_running": True, "login_status": "unknown"}
+                return {
+                    "account_id": command.account_id,
+                    "browser_running": True,
+                    "login_status": "unknown",
+                }
             snapshot = extract_page_snapshot(pages[0])
             return {
+                "account_id": command.account_id,
                 "browser_running": True,
                 "login_status": snapshot["login_status"],
                 "title": snapshot["title"],
@@ -105,7 +147,7 @@ class DefaultBrowserBackend:
                 "video_candidate_count": len(snapshot["video_candidates"]),
             }
         if isinstance(command, SyncCreatorList):
-            session = self._ensure_session(headless=command.headless)
+            session = self._ensure_session(command.account_id, headless=command.headless)
             page = session.open_creator_video_page()
             initial = extract_page_snapshot(page)
             videos: list[dict[str, Any]] = []
@@ -113,9 +155,14 @@ class DefaultBrowserBackend:
             if initial["login_status"] == "logged_in":
                 videos, load_stats = collect_all_video_cards(page)
             snapshot = extract_page_snapshot(page, videos, load_stats)
-            return {"snapshot": snapshot, "videos": videos, "load_stats": load_stats}
+            return {
+                "account_id": command.account_id,
+                "snapshot": snapshot,
+                "videos": videos,
+                "load_stats": load_stats,
+            }
         if isinstance(command, SyncVideoDetails):
-            session = self._ensure_session(headless=command.headless)
+            session = self._ensure_session(command.account_id, headless=command.headless)
             details: list[dict[str, Any]] = []
             for video in command.videos:
                 had_url = bool(video.get("video_url"))
@@ -136,7 +183,7 @@ class DefaultBrowserBackend:
                 )
             return {"details": details}
         if isinstance(command, VerifyAccount):
-            session = self._ensure_session()
+            session = self._ensure_session(command.account_id)
             page = session.open_creator_video_page()
             videos, load_stats = collect_all_video_cards(page)
             declared = load_stats.get("page_total_video_count")
@@ -162,14 +209,18 @@ class DefaultBrowserBackend:
                         VALIDATION_ERROR,
                         "Only a currently public video card may enter media observation.",
                     )
-                self._verified_targets[str(command.target_video_id)] = match
+                self._verified_targets[
+                    (command.account_id, str(command.target_video_id))
+                ] = match
             return {
                 "target_verified": bool(matches),
                 "declared_count": declared,
                 "collected_count": loaded,
             }
         if isinstance(command, ObserveMediaBundle):
-            target = self._verified_targets.get(command.target_video_id)
+            target = self._verified_targets.get(
+                (command.account_id, command.target_video_id)
+            )
             if target is None:
                 raise AppError(
                     VALIDATION_ERROR,
@@ -177,8 +228,8 @@ class DefaultBrowserBackend:
                 )
             return self._observe_media(command, target)
         if isinstance(command, CloseSession):
-            self.close()
-            return {"closed": True}
+            self.close(command.account_id)
+            return {"closed": True, "account_id": command.account_id}
         if isinstance(command, Shutdown):
             self.close()
             return {"shutdown": True}
@@ -237,15 +288,25 @@ class DefaultBrowserBackend:
                 "The signed-in creator account does not match the requested account.",
             )
 
-    def close(self) -> None:
-        session, self.session = self.session, None
-        lock, self.profile_lock = self.profile_lock, None
-        try:
-            if session is not None:
-                session.close()
-        finally:
-            if lock is not None:
-                lock.release()
+    def close(self, account_id: str | None = None) -> None:
+        account_ids = (
+            [validate_account_id(account_id)]
+            if account_id is not None
+            else list(self.sessions)
+        )
+        for current_id in account_ids:
+            session = self.sessions.pop(current_id, None)
+            lock = self.profile_locks.pop(current_id, None)
+            try:
+                if session is not None:
+                    session.close()
+            finally:
+                if lock is not None:
+                    lock.release()
+            for key in [
+                key for key in self._verified_targets if key[0] == current_id
+            ]:
+                self._verified_targets.pop(key, None)
 
     @staticmethod
     def _matching_videos(
@@ -287,7 +348,7 @@ class DefaultBrowserBackend:
     def _observe_media(
         self, command: ObserveMediaBundle, target: dict[str, Any]
     ) -> Any:
-        session = self._ensure_session()
+        session = self._ensure_session(command.account_id)
         page = session.open_creator_video_page()
         collect_all_video_cards(page)
         title = str(target.get("title") or "")
@@ -496,8 +557,8 @@ class BrowserExecutor:
         with self._cancel_lock:
             self._cancelled.add(command_id)
 
-    def close_session(self) -> None:
-        self.execute(CloseSession())
+    def close_session(self, account_id: str | None = None) -> None:
+        self.execute(CloseSession(account_id=account_id))
 
     def shutdown(self, timeout: float = 10.0) -> None:
         thread = self._thread

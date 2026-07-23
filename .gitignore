@@ -3,6 +3,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 tests/
+!tests/
+!tests/test_multi_account.py
 .mypy_cache/
 .ruff_cache/
 .venv/
