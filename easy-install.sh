@@ -36,6 +36,14 @@ venv_python="$project_root/.venv/bin/python"
 
 echo "[1/5] Using Python: $($python_command --version)"
 if [[ ! -x "$venv_python" ]]; then
+  if ! "$python_command" -c 'import ensurepip, venv' >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+This Python installation cannot create a virtual environment because venv or
+ensurepip is unavailable. Install the matching Python venv package first
+(Debian/Ubuntu example: python3-venv), then run this script again.
+EOF
+    exit 1
+  fi
   echo "[2/5] Creating .venv virtual environment..."
   "$python_command" -m venv .venv
 else

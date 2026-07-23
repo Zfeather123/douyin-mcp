@@ -7,6 +7,7 @@ import importlib.util
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -23,6 +24,21 @@ from .config import ensure_runtime_dirs, load_settings
 from .responses import error_response, response_from_exception, success_response
 from .services.browser_service import BrowserService
 from .storage.db import Database
+
+
+def _configured_browser_available(channel: str | None) -> bool:
+    """Check common channel executables without opening a browser."""
+    normalized = str(channel or "").strip().lower()
+    candidates = {
+        "chrome": ("google-chrome", "google-chrome-stable", "chrome"),
+        "chrome-beta": ("google-chrome-beta",),
+        "chrome-dev": ("google-chrome-unstable",),
+        "chromium": ("chromium", "chromium-browser"),
+        "msedge": ("microsoft-edge", "msedge"),
+        "msedge-beta": ("microsoft-edge-beta",),
+        "msedge-dev": ("microsoft-edge-dev",),
+    }.get(normalized, ())
+    return bool(candidates) and any(shutil.which(name) for name in candidates)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,7 +229,9 @@ def run_command(
             "profile_dir_ready": service.settings.douyin_browser_profile_dir.exists()
             and os.access(service.settings.douyin_browser_profile_dir, os.W_OK),
             "playwright_installed": importlib.util.find_spec("playwright") is not None,
-            "browser_channel": bool(service.settings.douyin_browser_channel),
+            "browser_executable_available": _configured_browser_available(
+                service.settings.douyin_browser_channel
+            ),
         }
         return success_response(checks=checks, ready=all(bool(value) for value in checks.values()))
     if args.command == "login":

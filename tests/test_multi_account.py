@@ -13,6 +13,7 @@ from douyin_creator_mcp.accounts import (
     validate_account_id,
 )
 from douyin_creator_mcp.config import Settings
+from douyin_creator_mcp.cli import _configured_browser_available
 from douyin_creator_mcp.browser.commands import LoginStart
 from douyin_creator_mcp.browser.executor import (
     BrowserExecutor,
@@ -276,6 +277,15 @@ class MultiAccountTest(unittest.TestCase):
         self.assertTrue(lock._acquired)
         lock.release()
         self.assertFalse(lock_path.exists())
+
+    def test_doctor_checks_configured_browser_executable(self) -> None:
+        with patch("douyin_creator_mcp.cli.shutil.which") as which:
+            which.side_effect = lambda name: (
+                "/usr/bin/google-chrome" if name == "google-chrome" else None
+            )
+            self.assertTrue(_configured_browser_available("chrome"))
+            self.assertFalse(_configured_browser_available("msedge"))
+            self.assertFalse(_configured_browser_available("unknown-channel"))
 
 
 if __name__ == "__main__":
