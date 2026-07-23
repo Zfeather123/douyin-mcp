@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,43 @@ def _write_qr_delivery_file(qr_image: bytes, account_id: str) -> Path:
         path.unlink(missing_ok=True)
         raise
     return path.resolve()
+
+
+def _upload_qr_to_multica(path: Path) -> dict[str, str] | None:
+    """Bind the QR directly to the active Multica reply when task context exists."""
+    if not os.environ.get("MULTICA_TASK_ID"):
+        return None
+    executable = shutil.which("multica")
+    if executable is None:
+        raise RuntimeError("Multica task detected, but the multica CLI is unavailable.")
+    completed = subprocess.run(
+        [executable, "attachment", "upload", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"QR attachment upload failed: {detail}")
+    stdout = completed.stdout.strip()
+    start = stdout.find("{")
+    if start < 0:
+        raise RuntimeError("QR attachment upload returned no JSON result.")
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(stdout[start:])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("QR attachment upload returned invalid JSON.") from exc
+    attachment_id = str(payload.get("id") or "").strip()
+    markdown = str(payload.get("markdown") or "").strip()
+    markdown_url = str(payload.get("markdown_url") or "").strip()
+    if not attachment_id or not markdown:
+        raise RuntimeError("QR attachment upload omitted its id or markdown.")
+    return {
+        "id": attachment_id,
+        "markdown": markdown,
+        "markdown_url": markdown_url,
+    }
 
 
 def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
@@ -92,9 +132,25 @@ def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
             result = resolve(ctx).browser_service.login_qr(account_id=account_id)
             qr_image = result.pop("qr_image", None)
             if qr_image:
-                result["qr_image_path"] = str(
-                    _write_qr_delivery_file(qr_image, account_id)
-                )
+                qr_path = _write_qr_delivery_file(qr_image, account_id)
+                attachment = None
+                multica_task = bool(os.environ.get("MULTICA_TASK_ID"))
+                try:
+                    attachment = _upload_qr_to_multica(qr_path)
+                    if attachment is None:
+                        result["qr_image_path"] = str(qr_path)
+                    else:
+                        result.update(
+                            {
+                                "qr_attachment_uploaded": True,
+                                "qr_attachment_id": attachment["id"],
+                                "qr_attachment_markdown": attachment["markdown"],
+                                "qr_attachment_url": attachment["markdown_url"],
+                            }
+                        )
+                finally:
+                    if multica_task:
+                        qr_path.unlink(missing_ok=True)
             structured = success_response(**result)
             content: list[Any] = [
                 TextContent(type="text", text=str(result["message"]))
