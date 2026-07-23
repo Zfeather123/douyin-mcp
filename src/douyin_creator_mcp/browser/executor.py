@@ -113,8 +113,9 @@ class DefaultBrowserBackend:
     def handle(self, command: BrowserCommand) -> Any:
         if isinstance(command, LoginStart):
             session = self._ensure_session(command.account_id, headless=command.headless)
-            snapshot = extract_page_snapshot(session.open_creator_home())
-            return {
+            page = session.open_creator_home()
+            snapshot = extract_page_snapshot(page)
+            result = {
                 "account_id": command.account_id,
                 "browser_running": session.is_running,
                 "login_status": snapshot["login_status"],
@@ -122,6 +123,9 @@ class DefaultBrowserBackend:
                 "source_url": snapshot["source_url"],
                 "video_candidate_count": len(snapshot["video_candidates"]),
             }
+            if command.capture_qr and snapshot["login_status"] != "logged_in":
+                result["qr_image"] = session.capture_login_qr(page)
+            return result
         if isinstance(command, LoginStatus):
             session = self.sessions.get(validate_account_id(command.account_id))
             if session is None or not session.is_running:

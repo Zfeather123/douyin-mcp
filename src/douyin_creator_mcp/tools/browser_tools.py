@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastmcp import Context
+from fastmcp.tools import ToolResult
+from fastmcp.utilities.types import Image
+from mcp.types import TextContent
 
 from ..responses import response_from_exception, success_response
 
@@ -57,6 +60,35 @@ def register_browser_tools(mcp: Any, services: Any | None = None) -> None:
     ) -> dict[str, Any]:
         """确认平台风险后打开可见浏览器；首次登录或登录过期时需要扫码。"""
         return call(ctx, "login_start", account_id=account_id)
+
+    @mcp.tool()
+    def douyin_browser_login_qr(
+        ctx: Context, account_id: str
+    ) -> ToolResult:
+        """在无图形服务环境中为指定账号返回登录二维码并保持独立会话。"""
+        try:
+            result = resolve(ctx).browser_service.login_qr(account_id=account_id)
+            qr_image = result.pop("qr_image", None)
+            structured = success_response(**result)
+            content: list[Any] = [
+                TextContent(type="text", text=str(result["message"]))
+            ]
+            if qr_image:
+                content.append(
+                    Image(data=qr_image, format="png").to_image_content()
+                )
+            return ToolResult(content=content, structured_content=structured)
+        except Exception as exc:
+            error = response_from_exception(exc)
+            return ToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=str(error.get("message") or "二维码登录失败。"),
+                    )
+                ],
+                structured_content=error,
+            )
 
     @mcp.tool()
     def douyin_browser_login_status(

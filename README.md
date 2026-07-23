@@ -293,6 +293,7 @@ douyin-mcp status
 | 工具 | 用途 |
 |---|---|
 | `douyin_browser_login_start` | 打开可见 Chrome，处理首次登录或重新登录 |
+| `douyin_browser_login_qr` | 在无图形服务环境为指定账号返回二维码并保持独立登录会话 |
 | `douyin_browser_login_status` | 查询当前浏览器登录状态 |
 | `douyin_browser_get_status` | 查询新鲜度、任务、覆盖率、账号绑定和 profile 锁 |
 | `douyin_browser_sync_if_needed` | 按 TTL 同步列表、详情或全部数据 |
@@ -331,6 +332,7 @@ douyin-mcp status
 ```text
 douyin_browser_login_start(account_id="xiaojing")
 douyin_browser_login_start(account_id="gaobei")
+douyin_browser_login_qr(account_id="gaobei")
 douyin_browser_sync_creator_data(account_id="xiaojing")
 douyin_browser_get_status(account_id="gaobei")
 ```
