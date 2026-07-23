@@ -107,6 +107,36 @@ class BrowserService:
             self.close_browser()
             raise
 
+    def login_qr(self, account_id: str | None = None) -> dict[str, Any]:
+        """Open an isolated headless login session and return an ephemeral QR."""
+        account_id = self._resolve_account_id(account_id)
+        self._require_account_executor(account_id)
+        require_platform_risk_acknowledgement(self.settings.data_dir)
+        if self._browser_executor is None:
+            raise AppError(
+                CONFIGURATION_ERROR,
+                "二维码登录需要启用多账号浏览器执行器。",
+                retryable=False,
+            )
+        result = self._browser_executor.execute(
+            LoginStart(account_id=account_id, headless=True, capture_qr=True)
+        )
+        if result.get("login_status") == LOGGED_IN:
+            return {
+                **result,
+                "message": "该账号 profile 已登录，无需重复扫码。",
+            }
+        if not result.get("qr_image"):
+            raise AppError(
+                DATA_NOT_AVAILABLE,
+                "登录页已打开，但未取得可展示的二维码。",
+                retryable=True,
+            )
+        return {
+            **result,
+            "message": "请由账号本人扫码。二维码过期后可重新调用本工具。",
+        }
+
     def login_status(self, account_id: str | None = None) -> dict[str, Any]:
         account_id = self._resolve_account_id(account_id)
         self._require_account_executor(account_id)

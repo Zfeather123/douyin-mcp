@@ -13,6 +13,7 @@ from douyin_creator_mcp.accounts import (
 from douyin_creator_mcp.config import Settings
 from douyin_creator_mcp.browser.commands import LoginStart
 from douyin_creator_mcp.browser.executor import DefaultBrowserBackend
+from douyin_creator_mcp.browser.session import BrowserSession
 from douyin_creator_mcp.errors import AppError
 from douyin_creator_mcp.services.browser_service import BrowserService
 from douyin_creator_mcp.storage.db import Database
@@ -169,6 +170,71 @@ class MultiAccountTest(unittest.TestCase):
             self.assertTrue(created[0].closed)
             self.assertFalse(created[1].closed)
             backend.close()
+
+    def test_qr_capture_prefers_square_login_element(self) -> None:
+        expected = b"qr-png"
+        test_case = self
+
+        class FakeNode:
+            def bounding_box(self) -> dict[str, int]:
+                return {"width": 240, "height": 240}
+
+            def screenshot(self, type: str) -> bytes:
+                test_case.assertEqual(type, "png")
+                return expected
+
+        class FakeLocator:
+            def count(self) -> int:
+                return 1
+
+            def nth(self, index: int) -> FakeNode:
+                test_case.assertEqual(index, 0)
+                return FakeNode()
+
+        class FakePage:
+            def locator(self, selector: str) -> FakeLocator:
+                test_case.assertIn("qrcode", selector)
+                return FakeLocator()
+
+            def screenshot(self, **kwargs: object) -> bytes:
+                raise AssertionError("full-page fallback should not be used")
+
+        session = BrowserSession(self.settings, headless=True)
+        self.assertEqual(session.capture_login_qr(FakePage()), expected)
+
+    def test_login_qr_uses_named_headless_profile(self) -> None:
+        class FakeExecutor:
+            def __init__(self) -> None:
+                self.command: LoginStart | None = None
+
+            def execute(self, command: LoginStart) -> dict[str, object]:
+                self.command = command
+                return {
+                    "account_id": command.account_id,
+                    "browser_running": True,
+                    "login_status": "login_required",
+                    "title": "抖音创作者中心",
+                    "source_url": "https://creator.douyin.com/",
+                    "video_candidate_count": 0,
+                    "qr_image": b"qr-png",
+                }
+
+        executor = FakeExecutor()
+        service = BrowserService(
+            self.settings,
+            self.db,
+            browser_executor=executor,
+        )
+        with patch(
+            "douyin_creator_mcp.services.browser_service."
+            "require_platform_risk_acknowledgement"
+        ):
+            result = service.login_qr("gaobei")
+        self.assertIsNotNone(executor.command)
+        self.assertEqual(executor.command.account_id, "gaobei")
+        self.assertTrue(executor.command.headless)
+        self.assertTrue(executor.command.capture_qr)
+        self.assertEqual(result["qr_image"], b"qr-png")
 
 
 if __name__ == "__main__":
